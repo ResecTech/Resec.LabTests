@@ -1,0 +1,15 @@
+{
+  "description": "NCP-7330 — image QR with allowed hyperlink URL (Process QR Codes URLs must not fail transformation).",
+  "fixtures": [
+    {
+      "file": "qr-allowed-url.png",
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed" ],
+      "forbiddenOutcomeDetailsPatterns": [ "Error parsing file", "Codetext can't be empty" ]
+    },
+    {
+      "file": "qr-allowed-url.jpg",
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed" ],
+      "forbiddenOutcomeDetailsPatterns": [ "Error parsing file", "Codetext can't be empty" ]
+    }
+  ]
+}

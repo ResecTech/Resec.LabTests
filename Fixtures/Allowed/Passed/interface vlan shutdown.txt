@@ -1,0 +1,80 @@
+interface vlan 257
+shutdown
+interface vlan 259
+shutdown
+interface vlan 261
+shutdown
+interface vlan 264
+shutdown
+interface vlan 265
+shutdown
+interface vlan 266
+shutdown
+interface vlan 271
+shutdown
+interface vlan 273
+shutdown
+interface vlan 274
+shutdown
+interface vlan 275
+shutdown
+interface vlan 279
+shutdown
+interface vlan 281
+shutdown
+interface vlan 282
+shutdown
+interface vlan 283
+shutdown
+interface vlan 285
+shutdown
+interface vlan 286
+shutdown
+interface vlan 287
+shutdown
+interface vlan 288
+shutdown
+interface vlan 289
+shutdown
+interface vlan 291
+shutdown
+interface vlan 293
+shutdown
+interface vlan 294
+shutdown
+interface vlan 296
+shutdown
+interface vlan 297
+shutdown
+interface vlan 298
+shutdown
+interface vlan 299
+shutdown
+interface vlan 303
+shutdown
+interface vlan 304
+shutdown
+interface vlan 305
+shutdown
+interface vlan 306
+shutdown
+interface vlan 307
+shutdown
+interface vlan 308
+shutdown
+interface vlan 309
+shutdown
+interface vlan 311
+shutdown
+interface vlan 312
+shutdown
+interface vlan 313
+shutdown
+interface vlan 316
+shutdown
+interface vlan 317
+shutdown
+interface vlan 318
+shutdown
+
+

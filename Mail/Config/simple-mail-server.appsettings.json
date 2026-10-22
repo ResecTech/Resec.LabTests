@@ -1,0 +1,9 @@
+{
+  "SmtpSettings": {
+    "Port": 26,
+    "SavedMessageFolder": "d:\\MailE2e\\CapturedOutbound",
+    "MaxHistoryEntries": 100,
+    "ResponseDelaySeconds": 5,
+    "SaveIncomingEmails": true
+  }
+}

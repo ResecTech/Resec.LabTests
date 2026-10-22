@@ -1,0 +1,21 @@
+{
+  "products": {
+    "ScanAgent": {
+      "repoRoot": "C:\\Work\\ResecTech\\Resec.Agent.ScanAgent"
+    },
+    "Core": {
+      "repoRoot": "C:\\Work\\ResecTech\\Resec.Core.Server"
+    },
+    "Mail": {
+      "repoRoot": "C:\\Work\\ResecTech\\Resec.Agent.Mail"
+    },
+    "FileTypeDetection": {
+      "repoRoot": "C:\\Work\\ResecTech\\Resec.FileTypeDetection"
+    }
+  },
+  "optional": {
+    "fixturesRoot": "",
+    "scanAgentDebugExe": "",
+    "corePolicyTemplateXml": ""
+  }
+}

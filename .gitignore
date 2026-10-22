@@ -1,0 +1,6 @@
+config/lab.local.json
+.idea/
+.vs/
+*.user
+azurite/
+.DS_Store

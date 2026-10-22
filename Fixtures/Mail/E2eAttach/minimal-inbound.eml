@@ -1,0 +1,7 @@
+From: e2e-sender@test.local
+To: e2e-recipient@test.local
+Subject: MA-E2E-minimal-inbound
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Minimal inbound message for mail agent E2E.

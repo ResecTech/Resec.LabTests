@@ -1,0 +1,1 @@
+Mail Agent E2E fixture — benign text attachment for bulk-send sanitization tests.
