@@ -26,6 +26,36 @@ $script:ScanAgentE2eMaxInlineEvidenceBytes = 63 * 1024 * 1024
 # Optional default Test Platform URL (East US 2). Function key must come from env — never commit keys.
 $script:ScanAgentTestPlatformDefaultBaseUrl = 'https://test-results-eus2-94505680.azurewebsites.net'
 
+function Initialize-ScanAgentE2eTestPlatformFromLabConfig {
+    <#
+    .SYNOPSIS
+      Applies optional testPlatform* settings from config\lab.local.json when TESTPLATFORM_* env vars are unset.
+      Shared by all Scan Agent E2E scripts (SA-01, SA-05, SA-08, ...).
+    #>
+    if ($env:TESTPLATFORM_DISABLE -eq '1') {
+        return
+    }
+
+    if (-not (Get-Command Get-LabOptionalString -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TESTPLATFORM_FUNCTION_KEY) -and
+        [string]::IsNullOrWhiteSpace($env:TESTPLATFORM_CODE)) {
+        $fromLab = Get-LabOptionalString -SettingName 'testPlatformFunctionKey' -EnvironmentVariable 'TESTPLATFORM_FUNCTION_KEY'
+        if (-not [string]::IsNullOrWhiteSpace($fromLab)) {
+            $env:TESTPLATFORM_FUNCTION_KEY = $fromLab
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TESTPLATFORM_BASE_URL)) {
+        $fromLabUrl = Get-LabOptionalString -SettingName 'testPlatformBaseUrl' -EnvironmentVariable 'TESTPLATFORM_BASE_URL'
+        if (-not [string]::IsNullOrWhiteSpace($fromLabUrl)) {
+            $env:TESTPLATFORM_BASE_URL = $fromLabUrl
+        }
+    }
+}
+
 function Get-ScanAgentTestPlatformReportConfig {
     if ($env:TESTPLATFORM_DISABLE -eq '1') {
         return $null

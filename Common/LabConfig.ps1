@@ -131,6 +131,47 @@ function Get-LabOptionalPath {
     return [System.IO.Path]::GetFullPath($value.Trim())
 }
 
+function Get-LabOptionalString {
+    <#
+    .SYNOPSIS
+      Optional string from lab.local.json optional.* (not a path). Env override when -EnvironmentVariable is set.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $SettingName,
+        [string] $EnvironmentVariable = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($EnvironmentVariable)) {
+        $fromEnv = [Environment]::GetEnvironmentVariable($EnvironmentVariable)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+            return $fromEnv.Trim()
+        }
+    }
+
+    try {
+        $cfg = Import-LabConfig
+    }
+    catch {
+        return $null
+    }
+
+    if ($null -eq $cfg.optional) {
+        return $null
+    }
+
+    if (-not ($cfg.optional.PSObject.Properties.Name -contains $SettingName)) {
+        return $null
+    }
+
+    $value = [string]$cfg.optional.$SettingName
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+
+    return $value.Trim()
+}
+
 function Get-LabScanAgentProductRoot {
     $repoRoot = Get-LabProductRepoRoot -Product ScanAgent
     return Join-Path $repoRoot 'src'

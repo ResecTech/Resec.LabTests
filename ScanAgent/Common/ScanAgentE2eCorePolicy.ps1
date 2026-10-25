@@ -732,3 +732,153 @@ function Resolve-TwoPolicyIdsFromList {
 
     return [pscustomobject]@{ PolicyA = $idA; PolicyB = $idB }
 }
+
+# Default SA-08 lab policy (single SMB in/out policy for abort mid-job E2E).
+$script:Sa08DefaultPolicyName = 'Test8-abort'
+$script:Sa08DefaultSourceRoot = 'c:\test\SA-08-in'
+$script:Sa08DefaultDestRoot = 'c:\test\SA-08-out'
+$script:Sa08DefaultSourceStoreName = 'sa08-smb-in'
+$script:Sa08DefaultDestStoreName = 'sa08-smb-out'
+
+function New-Sa08CorePolicyImportBody {
+    param(
+        [Parameter(Mandatory)]
+        [string] $TemplateXmlPath,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test8-abort',
+        [string] $SourceRoot = 'c:\test\SA-08-in',
+        [string] $DestRoot = 'c:\test\SA-08-out',
+        [string] $SourceStoreName = 'sa08-smb-in',
+        [string] $DestinationStoreName = 'sa08-smb-out',
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa08'
+    )
+
+    Ensure-Sa05SmbLabFolders -FolderPaths @($SourceRoot, $DestRoot) -MarkerPrefix 'SA-08'
+
+    [xml]$doc = Get-Content -LiteralPath $TemplateXmlPath -Encoding UTF8
+    $templatePolicy = Resolve-Sa05TemplatePolicyFromXml `
+        -PolicyNodes $doc.ImportExportContainer.Policies.Policy `
+        -TemplatePolicyName $TemplatePolicyName
+
+    $baseRaw = [string]$templatePolicy.PolicyRawData
+    if ([string]::IsNullOrWhiteSpace($baseRaw)) {
+        throw "Template policy '$($templatePolicy.Name)' in $TemplateXmlPath has empty PolicyRawData."
+    }
+
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $baseRaw
+    $raw = New-Sa05SmbInOutFacetBlock `
+        -SourceStoreName $SourceStoreName -SourceRootFolder $SourceRoot `
+        -DestinationStoreName $DestinationStoreName -DestinationRootFolder $DestRoot
+    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyId = 9108
+
+    return [ordered]@{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id             = $policyId
+                name           = $PolicyName
+                displayName    = "Debug SMB SA-08 ($SourceRoot -> $DestRoot)"
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $raw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'scan_agent'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Import-ScanAgentSa08CoreDebugPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test8-abort',
+        [string] $SourceRoot = 'c:\test\SA-08-in',
+        [string] $DestRoot = 'c:\test\SA-08-out',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $AgentDisconnectHoldSec = 5,
+        [int] $UiWaitMs = 120000
+    )
+
+    $templatePath = Resolve-ScanAgentSa05PolicyTemplateXml -OverridePath $PolicyTemplateXml
+    $importBody = New-Sa08CorePolicyImportBody -TemplateXmlPath $templatePath `
+        -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName `
+        -SourceRoot $SourceRoot -DestRoot $DestRoot
+
+    $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
+    Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-08)'
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe -DisconnectHoldSec $AgentDisconnectHoldSec
+
+    $null = Wait-ScanAgentPolicyListContainsNames -Exe $Exe -PolicyNames @($PolicyName) `
+        -TimeoutSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    $policyList = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.list')
+    if ($policyList.ok -ne $true) {
+        throw 'policy.list failed after SA-08 Core import and agent reconnect.'
+    }
+
+    $listedNames = @($policyList.policies | ForEach-Object { [string]$_.name })
+    if ($listedNames -notcontains $PolicyName) {
+        throw "Agent policy.list is missing policy '$PolicyName'. Listed: $($listedNames -join ', ')."
+    }
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.list includes $PolicyName."
+
+    return [pscustomobject]@{
+        PolicyTemplateXml = $templatePath
+        PolicyName        = $PolicyName
+        SourceRoot        = $SourceRoot
+        DestRoot          = $DestRoot
+        ImportResponse    = $import
+        AgentPolicyList   = $policyList
+    }
+}
+
+function Initialize-ScanAgentSa08CoreTestPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $CoreDebugHookUrl,
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test8-abort',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $UiWaitMs = 120000
+    )
+
+    $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    $imported = Import-ScanAgentSa08CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
+        -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    return [pscustomobject]@{
+        HookUrl           = $pushed.HookUrl
+        PolicyTemplateXml = $imported.PolicyTemplateXml
+        PolicyName        = $imported.PolicyName
+        SourceRoot        = $imported.SourceRoot
+        DestRoot          = $imported.DestRoot
+        PushResponse      = $pushed.PushResponse
+        ImportResponse    = $imported.ImportResponse
+        AgentPolicyList   = $imported.AgentPolicyList
+    }
+}

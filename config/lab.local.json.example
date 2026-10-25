@@ -16,6 +16,8 @@
   "optional": {
     "fixturesRoot": "",
     "scanAgentDebugExe": "",
-    "corePolicyTemplateXml": ""
+    "corePolicyTemplateXml": "",
+    "testPlatformBaseUrl": "",
+    "testPlatformFunctionKey": ""
   }
 }

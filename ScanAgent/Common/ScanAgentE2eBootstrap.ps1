@@ -40,3 +40,5 @@ foreach ($name in @(
     }
     . $path
 }
+
+Initialize-ScanAgentE2eTestPlatformFromLabConfig
