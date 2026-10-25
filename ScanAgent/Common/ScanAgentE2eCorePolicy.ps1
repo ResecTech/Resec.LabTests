@@ -419,7 +419,7 @@ function Wait-ScanAgentGatewayConnected {
                 Invoke-ScanAgentDebugReconnect -Exe $Exe | Out-Null
             }
             catch {
-                Write-Warning "Reconnect nudge failed ($Context): $($_.Exception.Message)"
+                Write-Warning "Reconnect nudge returned before gateway was up ($Context); continuing gateway.status poll. $($_.Exception.Message)"
             }
             Start-Sleep -Milliseconds 500
             continue

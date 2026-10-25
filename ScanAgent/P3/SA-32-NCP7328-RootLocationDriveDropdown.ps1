@@ -19,6 +19,9 @@
 
   Multi-root policies also select each root via selectSource / selectDestination.
 
+  NCP-7335 (multi-root): after the first manual root pick, rootLocationFlyoutPreview is invoked
+  twice per panel (simulates opening the drive dropdown again) and must stay enabled with list content.
+
   Prerequisites:
     - Desktop Scan Agent with DebugInterface.Enabled = true and gateway connected to Core.
     - Core EnableDebugInterface for /debug/hook.
@@ -26,6 +29,7 @@
 
 .NOTES
   Jira: NCP-7328 — drive dropdown empty / chevron state vs policy roots.
+  Jira: NCP-7335 — drive dropdown does not reopen after first manual root selection.
   Exit 0 = passed. Core poppolicystate in finally when this script pushed policy state.
 #>
 [CmdletBinding()]
@@ -201,7 +205,42 @@ function Assert-RootDropdownScenario {
         }
 
         if ($ExpectCanOpenRootList -and $listedNames.Count -gt 1) {
+            $firstRoot = $expectedNames[0]
+            Assert-FlyoutReopensAfterRootSelection -Exe $Exe -Panel $panel -SelectedRootName $firstRoot -ScenarioLabel $ScenarioLabel
             Assert-CanSelectEachRoot -Exe $Exe -Panel $panel -RootNames $listedNames -ScenarioLabel $ScenarioLabel
+        }
+    }
+}
+
+function Assert-FlyoutReopensAfterRootSelection {
+    param(
+        [string] $Exe,
+        [ValidateSet('source', 'destination')]
+        [string] $Panel,
+        [string] $SelectedRootName,
+        [string] $ScenarioLabel
+    )
+
+    $selectVerb = if ($Panel -eq 'source') { 'selectSource' } else { 'selectDestination' }
+
+    Write-TestStep "$ScenarioLabel - NCP-7335 $selectVerb '$SelectedRootName' then flyout preview x2 ($Panel)"
+    $select = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @(
+        $selectVerb, '--name', $SelectedRootName, '--wait-ms', "$UiWaitMs", '--wait-loaded'
+    )
+    Assert-OkResponse -Response $select -Step "$selectVerb $SelectedRootName ($ScenarioLabel / NCP-7335)"
+
+    foreach ($openAttempt in 1..2) {
+        $flyout = Invoke-RootLocationFlyoutPreview -Exe $Exe -Panel $Panel
+        Assert-OkResponse -Response $flyout -Step "rootLocationFlyoutPreview reopen $openAttempt ($ScenarioLabel / $Panel / NCP-7335)"
+
+        if ($flyout.canOpenRootLocationList -ne $true) {
+            throw "NCP-7335: after first root selection, canOpenRootLocationList must stay true on $Panel (open attempt $openAttempt)."
+        }
+        if ($flyout.hasListContent -ne $true) {
+            throw "NCP-7335: flyout preview must still list roots on $Panel (open attempt $openAttempt)."
+        }
+        if ($flyout.wouldNavigateOnCurrentRootReselect -eq $true) {
+            throw "NCP-7335: flyout must not treat current-root reselect as navigation on $Panel (open attempt $openAttempt)."
         }
     }
 }
