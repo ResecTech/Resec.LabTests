@@ -19,5 +19,9 @@
     "corePolicyTemplateXml": "",
     "testPlatformBaseUrl": "",
     "testPlatformFunctionKey": ""
+  },
+  "systemVariables": {
+    "sql_server_address": "",
+    "postgres_server_address": ""
   }
 }

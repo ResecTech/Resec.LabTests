@@ -197,3 +197,52 @@ function Get-LabCoreTestTreeRoot {
 function Get-LabFileTypeDetectionProductRoot {
     return Get-LabProductRepoRoot -Product FileTypeDetection
 }
+
+function Get-LabSystemVariables {
+    <#
+    .SYNOPSIS
+      Lab-wide variables from config\lab.local.json → systemVariables (used by fixture scripts as $name).
+    #>
+    $result = [ordered]@{}
+
+    try {
+        $cfg = Import-LabConfig
+    }
+    catch {
+        return $result
+    }
+
+    if ($null -eq $cfg.systemVariables) {
+        return $result
+    }
+
+    foreach ($prop in $cfg.systemVariables.PSObject.Properties) {
+        $result[$prop.Name] = [string]$prop.Value
+    }
+
+    return $result
+}
+
+function Get-LabSystemVariable {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    $key = $Name.Trim()
+    if ($key.StartsWith('$')) {
+        $key = $key.Substring(1)
+    }
+
+    $all = Get-LabSystemVariables
+    if (-not ($all.Contains($key))) {
+        return $null
+    }
+
+    $value = [string]$all[$key]
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+
+    return $value.Trim()
+}
