@@ -7,15 +7,53 @@ function Find-LabFtdConsoleHost {
         [string] $DeployFolder
     )
 
-    foreach ($name in @('FileDetection.dll', 'FileDetection.exe')) {
-        $hit = Get-ChildItem -LiteralPath $DeployFolder -Recurse -Filter $name -File -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($null -ne $hit) {
-            return $hit.FullName
+    foreach ($name in @(
+            'FileDetectionExe.exe',
+            'FileDetection.exe',
+            'FileDetectionExe.dll',
+            'FileDetection.dll')) {
+        $hits = @(Get-ChildItem -LiteralPath $DeployFolder -Recurse -Filter $name -File -ErrorAction SilentlyContinue)
+        if ($hits.Count -eq 0) {
+            continue
         }
+
+        return ($hits | Sort-Object { $_.FullName.Length }, FullName | Select-Object -First 1).FullName
     }
 
     return $null
+}
+
+function Invoke-LabFtdConsoleDetection {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ConsoleHostPath,
+        [Parameter(Mandatory)]
+        [string] $FilePath
+    )
+
+    $workingDirectory = [System.IO.Path]::GetDirectoryName($ConsoleHostPath)
+    if ([string]::IsNullOrWhiteSpace($workingDirectory)) {
+        throw "Invalid console host path: $ConsoleHostPath"
+    }
+
+    Push-Location $workingDirectory
+    try {
+        if ($ConsoleHostPath.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $output = (& $ConsoleHostPath -d $FilePath 2>&1 | Out-String).Trim()
+        }
+        else {
+            $output = (& dotnet $ConsoleHostPath -d $FilePath 2>&1 | Out-String).Trim()
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    if ([string]::IsNullOrWhiteSpace($output)) {
+        throw "FileDetection console host returned no output for '$FilePath'."
+    }
+
+    return $output
 }
 
 function Initialize-LabFtdReflectionEngine {
@@ -51,7 +89,7 @@ function Initialize-LabFtdReflectionEngine {
         throw 'RuleContainer type not found in deployed Resec.FileTypeDetection assembly.'
     }
 
-    $ruleContainer = [Activator]::CreateInstance($ruleContainerType)
+    $ruleContainer = [Activator]::CreateInstance($ruleContainerType, @($null, $null, $null))
     $globalOpenType = $assembly.GetType('Resec.FileTypeDetection.Util.Global`1', $false)
     if ($null -eq $globalOpenType) {
         throw 'Global<> type not found in deployed Resec.FileTypeDetection assembly.'
@@ -157,18 +195,7 @@ function Invoke-LabDeployedFileTypeDetection {
     $consoleHost = Find-LabFtdConsoleHost -DeployFolder $DeployFolder
 
     if (-not [string]::IsNullOrWhiteSpace($consoleHost)) {
-        $workingDirectory = [System.IO.Path]::GetDirectoryName($consoleHost)
-        Push-Location $workingDirectory
-        try {
-            $output = (& dotnet $consoleHost -d $fullPath 2>&1 | Out-String).Trim()
-        }
-        finally {
-            Pop-Location
-        }
-
-        if ([string]::IsNullOrWhiteSpace($output)) {
-            throw "FileDetection console host returned no output for '$fullPath'."
-        }
+        $output = Invoke-LabFtdConsoleDetection -ConsoleHostPath $consoleHost -FilePath $fullPath
 
         return [PSCustomObject]@{
             Mode = 'console'
