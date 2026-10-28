@@ -24,6 +24,21 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Write-FtdRunLog {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Message
+    )
+
+    # Write-Output is captured by Lab Test Runner stdout redirection; Write-Host may not be.
+    Write-Output $Message
+}
+
+function Get-LabTestDeployRequirements {
+    Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
+    return Get-FileTypeDetectionDeployRequirements
+}
+
 $testId = 'FTD-01'
 $testName = 'FTD-01 - e2e'
 $componentName = 'FileTypeDetection'
@@ -32,13 +47,37 @@ $startedAtUtc = [DateTimeOffset]::UtcNow
 $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\'))
 . (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
 $repositoryRoot = Get-LabFileTypeDetectionProductRoot
-$testProject = Join-Path $repositoryRoot 'src\FileTypeDetection\Resec.FileTypeDetection.Tests\Resec.FileTypeDetection.Tests.csproj'
+$testProjectRelative = 'src\FileTypeDetection\Resec.FileTypeDetection.Tests\Resec.FileTypeDetection.Tests.csproj'
+$testProject = Join-Path $repositoryRoot $testProjectRelative
 $resultsDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "FTD-E2E-$([Guid]::NewGuid().ToString('N'))"
 $trxFileName = "$testId.trx"
 $trxPath = Join-Path $resultsDirectory $trxFileName
 $consoleLogPath = Join-Path $resultsDirectory "$testId.log"
 
+function Initialize-FtdTestPlatformFromLabConfig {
+    if ($env:TESTPLATFORM_DISABLE -eq '1') {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TESTPLATFORM_FUNCTION_KEY) -and
+        [string]::IsNullOrWhiteSpace($env:TESTPLATFORM_CODE)) {
+        $fromLab = Get-LabOptionalString -SettingName 'testPlatformFunctionKey' -EnvironmentVariable 'TESTPLATFORM_FUNCTION_KEY'
+        if (-not [string]::IsNullOrWhiteSpace($fromLab)) {
+            $env:TESTPLATFORM_FUNCTION_KEY = $fromLab
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TESTPLATFORM_BASE_URL)) {
+        $fromLabUrl = Get-LabOptionalString -SettingName 'testPlatformBaseUrl' -EnvironmentVariable 'TESTPLATFORM_BASE_URL'
+        if (-not [string]::IsNullOrWhiteSpace($fromLabUrl)) {
+            $env:TESTPLATFORM_BASE_URL = $fromLabUrl
+        }
+    }
+}
+
 function Get-TestPlatformConfig {
+    Initialize-FtdTestPlatformFromLabConfig
+
     if ($env:TESTPLATFORM_DISABLE -eq '1') {
         return $null
     }
@@ -53,7 +92,7 @@ function Get-TestPlatformConfig {
         $functionKey = $env:TESTPLATFORM_CODE
     }
     if ([string]::IsNullOrWhiteSpace($functionKey)) {
-        Write-Warning 'Test Platform function key is missing; skipping report.'
+        Write-FtdRunLog '[TestPlatform] Cloud reporting skipped (function key not configured).'
         return $null
     }
 
@@ -164,10 +203,35 @@ function Send-TestPlatformResult {
         $body.runId = "$($Config.BuildId):$testId"
     }
 
-    $uri = '{0}/api/results?code={1}' -f $Config.BaseUrl, [Uri]::EscapeDataString($Config.FunctionKey)
     $json = $body | ConvertTo-Json -Depth 6 -Compress
-    $response = Invoke-RestMethod -Uri $uri -Method Post -Body $json -ContentType 'application/json; charset=utf-8'
-    Write-Host "[TestPlatform] Reported result id=$($response.id) outcome=$($body.outcome) test=$testName"
+    $uri = '{0}/api/results' -f $Config.BaseUrl
+    $headers = @{
+        'x-functions-key' = (Get-NormalizedTestPlatformFunctionKey -Raw $Config.FunctionKey)
+    }
+    $versionSuffix = if (-not [string]::IsNullOrWhiteSpace($ComponentVersion)) { " version=$ComponentVersion" } else { '' }
+    Write-FtdRunLog "[TestPlatform] Reporting to cloud ($($Config.BaseUrl)) outcome=$($body.outcome) test=$testName$versionSuffix"
+    $response = Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Body $json -ContentType 'application/json; charset=utf-8'
+    $resultId = $response.id
+    Write-FtdRunLog "[TestPlatform] Reported to cloud: result id=$resultId outcome=$($body.outcome) test=$testName$versionSuffix"
+}
+
+function Get-NormalizedTestPlatformFunctionKey {
+    param([string] $Raw)
+
+    if ([string]::IsNullOrWhiteSpace($Raw)) {
+        return ''
+    }
+
+    $key = $Raw.Trim()
+    if ($key -match '[?&]code=([^&]+)') {
+        return [Uri]::UnescapeDataString($matches[1])
+    }
+
+    if ($key.StartsWith('code=', [StringComparison]::OrdinalIgnoreCase)) {
+        return $key.Substring(5).Trim()
+    }
+
+    return $key
 }
 
 New-Item -ItemType Directory -Path $resultsDirectory -Force | Out-Null
@@ -178,12 +242,27 @@ $failureMessage = $null
 $runLog = $null
 
 try {
+    $ftdVersion = Get-ComponentVersion
+    if ([string]::IsNullOrWhiteSpace($ftdVersion)) {
+        Write-Host 'FileTypeDetection version: (not found — build the product or set TESTPLATFORM_COMPONENT_VERSION)'
+    }
+    else {
+        Write-Host "FileTypeDetection version: $ftdVersion"
+    }
+
     Write-Host "Running complete FTD unit-test suite: $testProject"
-    & dotnet test --project $testProject --configuration $Configuration --results-directory $resultsDirectory `
-        --minimum-expected-tests 1 --no-ansi --no-progress --stop-on-fail off `
-        --report-xunit-trx --report-xunit-trx-filename $trxFileName 2>&1 |
-        Tee-Object -FilePath $consoleLogPath
-    $dotnetExitCode = $LASTEXITCODE
+    Push-Location $repositoryRoot
+    try {
+        # Microsoft.Testing.Platform (FTD global.json) requires --project and MTP flags; cwd must be the FTD repo root.
+        & dotnet test --project $testProjectRelative --configuration $Configuration --results-directory $resultsDirectory `
+            --minimum-expected-tests 1 --no-ansi --no-progress --stop-on-fail off `
+            --report-xunit-trx --report-xunit-trx-filename $trxFileName 2>&1 |
+            Tee-Object -FilePath $consoleLogPath
+        $dotnetExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
 
     if (Test-Path -LiteralPath $trxPath -PathType Leaf) {
         $result = Get-TrxResults -Path $trxPath
@@ -223,14 +302,26 @@ finally {
     }
 
     $passed = $dotnetExitCode -eq 0 -and $result -and $result.Failed -eq 0 -and $result.Total -gt 0
-    $config = Get-TestPlatformConfig
-    if ($config) {
-        try {
-            Send-TestPlatformResult -Config $config -Passed:$passed -Message $failureMessage `
-                -RunLog $runLog -ComponentVersion (Get-ComponentVersion)
-        }
-        catch {
-            Write-Warning "Test Platform reporting failed: $($_.Exception.Message)"
+    if ($env:TESTPLATFORM_DISABLE -eq '1') {
+        Write-FtdRunLog '[TestPlatform] Cloud reporting disabled (TESTPLATFORM_DISABLE=1).'
+    }
+    else {
+        $config = Get-TestPlatformConfig
+        if ($config) {
+            try {
+                Send-TestPlatformResult -Config $config -Passed:$passed -Message $failureMessage `
+                    -RunLog $runLog -ComponentVersion (Get-ComponentVersion)
+            }
+            catch {
+                $hint = if ($_.Exception.Message -match '401') {
+                    ' Check the Test Platform function key in Lab Test Runner Setup (or optional.testPlatformFunctionKey in lab.local.json), or set TESTPLATFORM_DISABLE=1 to skip reporting.'
+                }
+                else {
+                    ''
+                }
+
+                Write-FtdRunLog "[TestPlatform] Cloud reporting failed: $($_.Exception.Message).$hint"
+            }
         }
     }
 }

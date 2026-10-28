@@ -64,6 +64,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-LabTestDeployRequirements {
+    Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
+    return Get-MailDeployRequirements
+}
+
 $script:MaE2eCommonRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common'
 . (Join-Path $script:MaE2eCommonRoot 'MailAgentE2eBootstrap.ps1') -CallingScriptRoot $PSScriptRoot
 

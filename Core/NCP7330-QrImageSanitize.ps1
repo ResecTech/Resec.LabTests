@@ -40,6 +40,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-LabTestDeployRequirements {
+    Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
+    return Get-CoreDeployRequirements
+}
+
 $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
 . (Join-Path $labTestsRoot 'Common\LabFixtures.ps1')

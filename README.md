@@ -29,7 +29,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | --- | --- |
 | `Fixtures/` | **All files passed through products** (shared across suites). See [Fixtures/README.md](Fixtures/README.md). |
 | `config/` | `lab.local.json` (machine-specific; gitignored) from `lab.local.json.example` |
-| `Common/` | `LabConfig.ps1`, `LabFixtures.ps1` |
+| `Common/` | `LabConfig.ps1`, `LabFixtures.ps1`, deploy fixture helpers (`LabTestDeploySuiteDefaults.ps1`) |
 | `ScanAgent/` | Scan Agent UI E2E scripts and `Common/` helpers |
 | `Core/` | Core `/debug/hook` E2E and QR fixture generator tool |
 | `Mail/` | Mail Agent E2E and SimpleMailServer config |
@@ -63,6 +63,12 @@ Regenerate Core QR images:
 ```powershell
 dotnet run -c Release --project Core\Tools\GenerateQrTestFixtures\GenerateQrTestFixtures.csproj
 ```
+
+## Deploy fixtures (Lab Test Runner)
+
+Each E2E test script can define **`Get-LabTestDeployRequirements`**, returning deploy script ids (see `Common\LabTestDeploySuiteDefaults.ps1`). Before running a test, **Lab Test Runner** checks that each required product has a successful lab deploy under `{Production download root}\{Product}-{Branch}-{Version}\Deploy\` (`.lab-deploy.json` + payload). Optional **`RequiresRunning`** verifies a matching process is up (used for Core).
+
+Download builds from Product catalog, deploy from **Deploy** in the runner, then run tests.
 
 ## Mail E2E tools
 

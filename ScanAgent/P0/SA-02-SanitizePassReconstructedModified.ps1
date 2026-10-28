@@ -40,6 +40,11 @@ $script:Sa02SelectAllFilesSentinel = [int]::MaxValue
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-LabTestDeployRequirements {
+    Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
+    return Get-ScanAgentDeployRequirements
+}
+
 $script:ScenarioPassed = $false
 $script:ScenarioFailureMessage = $null
 $script:TestStartedAtUtc = [DateTimeOffset]::MinValue
