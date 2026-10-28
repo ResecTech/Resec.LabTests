@@ -88,9 +88,11 @@ if ($null -eq $funcAst) {
 
 $testDir = [System.IO.Path]::GetDirectoryName($resolvedPath)
 $escapedDir = $testDir.Replace("'", "''")
+$funcBody = $funcAst.Extent.Text
+# Tests pass -ScriptRoot $PSScriptRoot; under Invoke-Expression $PSScriptRoot is not the test folder.
+$funcBody = [regex]::Replace($funcBody, '\$PSScriptRoot', "'$escapedDir'")
 $defineAndInvoke = @"
-`$PSScriptRoot = '$escapedDir'
-$($funcAst.Extent.Text)
+$funcBody
 Get-LabTestDeployRequirements
 "@
 
