@@ -101,7 +101,7 @@ function Invoke-ScanAgentCoreDebugHook {
         [string] $HookUrl,
         [Parameter(Mandatory)]
         [string] $Command,
-        [hashtable] $BodyObject,
+        $BodyObject,
         [int] $TimeoutSec = 180
     )
 
@@ -109,11 +109,16 @@ function Invoke-ScanAgentCoreDebugHook {
 
     try {
         if ($BodyObject) {
-            $payload = $BodyObject.Clone()
+            $payload = @{}
+            foreach ($key in $BodyObject.Keys) {
+                $payload[$key] = $BodyObject[$key]
+            }
             $payload['command'] = $Command
             $json = $payload | ConvertTo-Json -Depth 60 -Compress
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-            return Invoke-RestMethod -Uri $HookUrl -Method Post -Body $bytes `
+            $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
+            $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
+            return Invoke-RestMethod -Uri $uri -Method Post -Body $bytes `
                 -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
         }
 
@@ -307,6 +312,79 @@ function Remove-Sa05LocationFacetsFromPolicyRaw {
     foreach ($header in $headers) {
         $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader $header
     }
+    return $raw
+}
+
+function Get-Sa07LabAllowedFileTypesValue {
+    <#
+      Modern WebMC AllowedFileTypes line (all categories allowed) so encrypted lab fixtures
+      (7z, rar, office, zip, etc.) are not blocked as SevenZip / Archives subtypes.
+    #>
+    return 'Archives=True|CAD=True|Databases=True|Documents (Common)=True|Documents (Uncommon)=True|Email=True|Embedded Office Objects=True|Executables=True|Images=True|Media Files=True|Model=True|Others=True|Scripts=True|Unknown File=True|Unsafe=True'
+}
+
+function Set-Sa07PolicyRawAllowAllFileTypes {
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    $allowedLine = 'StrPropType_AllowedFileTypes=' + (Get-Sa07LabAllowedFileTypesValue)
+    if ($PolicyRawData -match '(?m)^StrPropType_AllowedFileTypes=.*$') {
+        return [regex]::Replace($PolicyRawData, '(?m)^StrPropType_AllowedFileTypes=.*$', $allowedLine)
+    }
+
+    if ($PolicyRawData -match ';Facet Basic Settings:Basic Settings') {
+        return [regex]::Replace(
+            $PolicyRawData,
+            ';Facet Basic Settings:Basic Settings',
+            ";Facet Basic Settings:Basic Settings`r`n$allowedLine")
+    }
+
+    if ($PolicyRawData -match ';Facet Basic:Basic') {
+        return [regex]::Replace(
+            $PolicyRawData,
+            ';Facet Basic:Basic',
+            ";Facet Basic:Basic`r`n$allowedLine")
+    }
+
+    return "$allowedLine`r`n" + $PolicyRawData
+}
+
+function New-Sa07LabScannersFacet {
+    return @"
+;Facet Scanners:Scanners
+NumPropType_EnableScanner_Email Reputation Checker=False
+NumPropType_EnableScanner_ICAP Client=False
+NumPropType_EnableScanner_Regular Expression Scanner=False
+NumPropType_EnableScanner_Third-Party Signature Validator=False
+NumPropType_EnableScanner_XML validation Scanner=False
+NumPropType_EnableScanner_SigFile Validator=False
+NumPropType_EnableScanner_Avira(Win)=False
+NumPropType_EnableScanner_ClamAv=False
+NumPropType_EnableScanner_Sophos antivirus=False
+NumPropType_EnableScanner_Windows Defender=False
+NumPropType_EnableScanner_Microsoft Security Essentials=False
+NumPropType_EnableScanner_CAPE Sandbox=False
+NumPropType_EnableScanner_Folder scanner=False
+
+"@
+}
+
+function Set-Sa07PolicyRawPermissiveLabScanAgentPolicy {
+    <#
+      SA-07 lab policy: allow all file categories and disable optional scanners so fixture
+      sanitization is not blocked by policy or CAPE/sandbox failures on archive contents.
+    #>
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    $raw = Set-Sa07PolicyRawAllowAllFileTypes -PolicyRawData $PolicyRawData
+    $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'Scanners:Scanners'
+    $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'System Health:System Health'
+    $raw += @"
+;Facet System Health:System Health
+NumPropType_MinNumberOfValidScanners=0
+NumPropType_MaxScannersDefinitionAge=168
+
+"@
+    $raw += New-Sa07LabScannersFacet
     return $raw
 }
 
@@ -933,5 +1011,161 @@ function Initialize-ScanAgentSa08CoreTestPolicy {
         PushResponse     = $pushed.PushResponse
         ImportResponse   = $imported.ImportResponse
         AgentPolicyList  = $imported.AgentPolicyList
+    }
+}
+
+# Default SA-07 lab policy (Local Source + Local Destination on Scan Agent template).
+$script:Sa07DefaultPolicyName = 'Test7-password'
+
+function Get-Sa07LocalLocationTypesLine {
+    return 'Location Type=CdRom=True|Desktop=True|Fixed=True|Floppy=True|MobileDevice=True|MyDocuments=True|MyDownloads=True|Network=True|Removable=True'
+}
+
+function New-Sa07LocalSourceFacet {
+    return @"
+;Facet Local Source:Local Source
+StrPropType_ScannedFileLocationName=In
+$(Get-Sa07LocalLocationTypesLine)
+
+"@
+}
+
+function New-Sa07LocalDestinationFacet {
+    return @"
+;Facet Local Destination:Local Destination
+StrPropType_ScannedFileLocationName=Out
+$(Get-Sa07LocalLocationTypesLine)
+NumPropType_ScannedFileSmbLocationOverwriteExistingFile=True
+
+"@
+}
+
+function New-Sa07LocalInOutFacetBlock {
+    return (New-Sa07LocalSourceFacet) + (New-Sa07LocalDestinationFacet)
+}
+
+function New-Sa07CorePolicyImportBody {
+    param(
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test7-password',
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa07'
+    )
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
+    $baseRaw = Set-Sa07PolicyRawPermissiveLabScanAgentPolicy -PolicyRawData $baseRaw
+    $raw = New-Sa07LocalInOutFacetBlock
+    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyId = 9107
+
+    return @{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id             = $policyId
+                name           = $PolicyName
+                displayName    = 'Debug local SA-07 (encrypted password dialog)'
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $raw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'scan_agent'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Import-ScanAgentSa07CoreDebugPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test7-password',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $AgentDisconnectHoldSec = 5,
+        [int] $UiWaitMs = 120000
+    )
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core importpolicies policy base: $($resolvedBase.Source)"
+    $importBody = New-Sa07CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
+        -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName
+
+    $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
+    Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-07)'
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe -DisconnectHoldSec $AgentDisconnectHoldSec
+
+    $null = Wait-ScanAgentPolicyListContainsNames -Exe $Exe -PolicyNames @($PolicyName) `
+        -TimeoutSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    $policyList = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.list')
+    if ($policyList.ok -ne $true) {
+        throw 'policy.list failed after SA-07 Core import and agent reconnect.'
+    }
+
+    $listedNames = @($policyList.policies | ForEach-Object { [string]$_.name })
+    if ($listedNames -notcontains $PolicyName) {
+        throw "Agent policy.list is missing policy '$PolicyName'. Listed: $($listedNames -join ', ')."
+    }
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.list includes $PolicyName."
+
+    return [pscustomobject]@{
+        PolicyBaseSource = $resolvedBase.Source
+        PolicyName       = $PolicyName
+        ImportResponse   = $import
+        AgentPolicyList  = $policyList
+    }
+}
+
+function Initialize-ScanAgentSa07CoreTestPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test7-password',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $UiWaitMs = 120000
+    )
+
+    $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    $imported = Import-ScanAgentSa07CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    return [pscustomobject]@{
+        HookUrl           = $pushed.HookUrl
+        PolicyBaseSource  = $imported.PolicyBaseSource
+        PolicyName        = $imported.PolicyName
+        PushResponse      = $pushed.PushResponse
+        ImportResponse    = $imported.ImportResponse
+        AgentPolicyList   = $imported.AgentPolicyList
     }
 }
