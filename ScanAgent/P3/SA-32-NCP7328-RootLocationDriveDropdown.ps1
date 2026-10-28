@@ -298,7 +298,7 @@ try {
             -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName -UiWaitMs $UiWaitMs
         $script:Ncp7328CorePolicyStackPushed = $true
         $script:Ncp7328CoreDebugHookUrl = $coreSetup.HookUrl
-        Write-TestStep "Core lab policies imported (template='$($coreSetup.PolicyTemplateXml)')"
+        Write-TestStep "Core lab policies imported (policyBase='$($coreSetup.PolicyBaseSource)')"
     }
     else {
         Write-TestStep 'SkipCorePolicySetup: assuming NCP7328-one and NCP7328-multi already on Core'

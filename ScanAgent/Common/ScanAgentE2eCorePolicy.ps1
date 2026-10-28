@@ -301,8 +301,8 @@ function Ensure-Sa05SmbLabFolders {
 
 function New-Sa05CorePolicyImportBody {
     param(
-        [Parameter(Mandatory)]
-        [string] $TemplateXmlPath,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
         [string] $TemplatePolicyName = '',
         [string] $PolicyNameA = 'Test5-a',
         [string] $PolicyNameB = 'Test5-b',
@@ -317,17 +317,9 @@ function New-Sa05CorePolicyImportBody {
 
     Ensure-Sa05SmbLabFolders -FolderPaths @($SourceRootA, $DestRootA, $SourceRootB, $DestRootB)
 
-    [xml]$doc = Get-Content -LiteralPath $TemplateXmlPath -Encoding UTF8
-    $templatePolicy = Resolve-Sa05TemplatePolicyFromXml `
-        -PolicyNodes $doc.ImportExportContainer.Policies.Policy `
-        -TemplatePolicyName $TemplatePolicyName
-
-    $baseRaw = [string]$templatePolicy.PolicyRawData
-    if ([string]::IsNullOrWhiteSpace($baseRaw)) {
-        throw "Template policy '$($templatePolicy.Name)' in $TemplateXmlPath has empty PolicyRawData."
-    }
-
-    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $baseRaw
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
 
     $rawA = New-Sa05SmbInOutFacetBlock `
         -SourceStoreName $SourceStoreName -SourceRootFolder $SourceRootA `
@@ -406,11 +398,20 @@ function Wait-ScanAgentGatewayConnected {
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
     $reconnectNudged = $false
+    $lastProgressLog = [DateTimeOffset]::MinValue
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         # Gateway connect is independent of UI spinner / source folder load — poll status first.
         $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
         if ($gateway.ok -eq $true -and $gateway.isConnected -eq $true) {
             return $gateway
+        }
+
+        $now = [DateTimeOffset]::UtcNow
+        if (($now - $lastProgressLog).TotalSeconds -ge 10) {
+            $statusText = if ($gateway.connectionStatus) { [string]$gateway.connectionStatus } else { 'not connected' }
+            $remainingSec = [Math]::Max(0, [int]($deadline - $now).TotalSeconds)
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Waiting for gateway.status isConnected ($Context): $statusText (${remainingSec}s left)"
+            $lastProgressLog = $now
         }
 
         if ($NudgeReconnect -and -not $reconnectNudged) {
@@ -497,6 +498,7 @@ function Import-ScanAgentSa05CoreDebugPolicies {
         [string] $HookUrl,
         [Parameter(Mandatory)]
         [string] $Exe,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [string] $PolicyNameA = 'Test5-a',
@@ -510,8 +512,10 @@ function Import-ScanAgentSa05CoreDebugPolicies {
         [int] $UiWaitMs = 120000
     )
 
-    $templatePath = Resolve-ScanAgentSa05PolicyTemplateXml -OverridePath $PolicyTemplateXml
-    $importBody = New-Sa05CorePolicyImportBody -TemplateXmlPath $templatePath `
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $importBody = New-Sa05CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
         -TemplatePolicyName $TemplatePolicyName `
         -PolicyNameA $PolicyNameA -PolicyNameB $PolicyNameB `
         -SourceRootA $SourceRootA -DestRootA $DestRootA `
@@ -541,7 +545,7 @@ function Import-ScanAgentSa05CoreDebugPolicies {
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.list includes $($PolicyNameA) and $($PolicyNameB)."
 
     return [pscustomobject]@{
-        PolicyTemplateXml = $templatePath
+        PolicyBaseSource  = $resolvedBase.Source
         PolicyNameA       = $PolicyNameA
         PolicyNameB       = $PolicyNameB
         ImportResponse    = $import
@@ -554,6 +558,7 @@ function Initialize-ScanAgentSa05CoreTestPolicies {
         [Parameter(Mandatory)]
         [string] $Exe,
         [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [string] $PolicyNameA = 'Test5-a',
@@ -564,17 +569,17 @@ function Initialize-ScanAgentSa05CoreTestPolicies {
 
     $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
     $imported = Import-ScanAgentSa05CoreDebugPolicies -HookUrl $pushed.HookUrl -Exe $Exe `
-        -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
         -PolicyNameA $PolicyNameA -PolicyNameB $PolicyNameB `
         -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
 
     return [pscustomobject]@{
-        HookUrl              = $pushed.HookUrl
-        PolicyTemplateXml    = $imported.PolicyTemplateXml
-        PolicyNameA          = $imported.PolicyNameA
-        PolicyNameB          = $imported.PolicyNameB
-        PushResponse         = $pushed.PushResponse
-        ImportResponse       = $imported.ImportResponse
+        HookUrl          = $pushed.HookUrl
+        PolicyBaseSource = $imported.PolicyBaseSource
+        PolicyNameA      = $imported.PolicyNameA
+        PolicyNameB      = $imported.PolicyNameB
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
     }
 }
 
@@ -742,8 +747,8 @@ $script:Sa08DefaultDestStoreName = 'sa08-smb-out'
 
 function New-Sa08CorePolicyImportBody {
     param(
-        [Parameter(Mandatory)]
-        [string] $TemplateXmlPath,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
         [string] $TemplatePolicyName = '',
         [string] $PolicyName = 'Test8-abort',
         [string] $SourceRoot = 'c:\test\SA-08-in',
@@ -755,17 +760,9 @@ function New-Sa08CorePolicyImportBody {
 
     Ensure-Sa05SmbLabFolders -FolderPaths @($SourceRoot, $DestRoot) -MarkerPrefix 'SA-08'
 
-    [xml]$doc = Get-Content -LiteralPath $TemplateXmlPath -Encoding UTF8
-    $templatePolicy = Resolve-Sa05TemplatePolicyFromXml `
-        -PolicyNodes $doc.ImportExportContainer.Policies.Policy `
-        -TemplatePolicyName $TemplatePolicyName
-
-    $baseRaw = [string]$templatePolicy.PolicyRawData
-    if ([string]::IsNullOrWhiteSpace($baseRaw)) {
-        throw "Template policy '$($templatePolicy.Name)' in $TemplateXmlPath has empty PolicyRawData."
-    }
-
-    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $baseRaw
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
     $raw = New-Sa05SmbInOutFacetBlock `
         -SourceStoreName $SourceStoreName -SourceRootFolder $SourceRoot `
         -DestinationStoreName $DestinationStoreName -DestinationRootFolder $DestRoot
@@ -809,6 +806,7 @@ function Import-ScanAgentSa08CoreDebugPolicy {
         [string] $HookUrl,
         [Parameter(Mandatory)]
         [string] $Exe,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [string] $PolicyName = 'Test8-abort',
@@ -819,8 +817,10 @@ function Import-ScanAgentSa08CoreDebugPolicy {
         [int] $UiWaitMs = 120000
     )
 
-    $templatePath = Resolve-ScanAgentSa05PolicyTemplateXml -OverridePath $PolicyTemplateXml
-    $importBody = New-Sa08CorePolicyImportBody -TemplateXmlPath $templatePath `
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $importBody = New-Sa08CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
         -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName `
         -SourceRoot $SourceRoot -DestRoot $DestRoot
 
@@ -845,7 +845,7 @@ function Import-ScanAgentSa08CoreDebugPolicy {
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.list includes $PolicyName."
 
     return [pscustomobject]@{
-        PolicyTemplateXml = $templatePath
+        PolicyBaseSource  = $resolvedBase.Source
         PolicyName        = $PolicyName
         SourceRoot        = $SourceRoot
         DestRoot          = $DestRoot
@@ -859,6 +859,7 @@ function Initialize-ScanAgentSa08CoreTestPolicy {
         [Parameter(Mandatory)]
         [string] $Exe,
         [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [string] $PolicyName = 'Test8-abort',
@@ -868,17 +869,17 @@ function Initialize-ScanAgentSa08CoreTestPolicy {
 
     $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
     $imported = Import-ScanAgentSa08CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
-        -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
         -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
 
     return [pscustomobject]@{
-        HookUrl           = $pushed.HookUrl
-        PolicyTemplateXml = $imported.PolicyTemplateXml
-        PolicyName        = $imported.PolicyName
-        SourceRoot        = $imported.SourceRoot
-        DestRoot          = $imported.DestRoot
-        PushResponse      = $pushed.PushResponse
-        ImportResponse    = $imported.ImportResponse
-        AgentPolicyList   = $imported.AgentPolicyList
+        HookUrl          = $pushed.HookUrl
+        PolicyBaseSource = $imported.PolicyBaseSource
+        PolicyName       = $imported.PolicyName
+        SourceRoot       = $imported.SourceRoot
+        DestRoot         = $imported.DestRoot
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
+        AgentPolicyList  = $imported.AgentPolicyList
     }
 }

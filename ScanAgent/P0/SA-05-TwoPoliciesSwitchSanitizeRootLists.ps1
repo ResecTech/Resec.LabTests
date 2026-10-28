@@ -13,7 +13,7 @@
   Prerequisites:
     - Desktop Scan Agent running with DebugInterface.Enabled = true and gateway connected.
     - Core REST debug hooks enabled (EnableDebugInterface) for default policy lab setup.
-    - WebMC export XML with a Scan Agent template policy (default: latest C:\resec\ImportExport\ImportExport_*.xml).
+    - WebMC export XML with a Scan Agent template policy (optional -PolicyTemplateXml; default is embedded lab policy in ScanAgentE2eEmbeddedPolicyBase.ps1).
     - Folder named SA-TestFiles on drive C:\ with eligible test files (optional -TestFilesRoot / -SourceFolder).
 
   Default Core setup (unless -SkipCorePolicySetup): GET pushpolicystate (snapshot DB policies + rules),
@@ -35,6 +35,7 @@ param(
     [string] $TestFilesRoot = '',
     [switch] $SkipCorePolicySetup,
     [string] $CoreDebugHookUrl = '',
+    [string] $PolicyBaseRaw = '',
     [string] $PolicyTemplateXml = '',
     [string] $TemplatePolicyName = '',
     [string] $CorePolicyNameA = 'Test5-a',
@@ -1508,12 +1509,12 @@ try {
 
         Write-TestStep "Core: importpolicies ($CorePolicyNameA, $CorePolicyNameB + scan_agent rule); then commdown 5s commup (disconnect all agents)"
         $coreImport = Import-ScanAgentSa05CoreDebugPolicies -HookUrl $script:Sa05CoreDebugHookUrl -Exe $exe `
-            -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+            -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
             -PolicyNameA $CorePolicyNameA -PolicyNameB $CorePolicyNameB -UiWaitMs $UiWaitMs
         $importedCount = if ($coreImport.ImportResponse.PSObject.Properties.Name -contains 'importedPolicyCount') {
             $coreImport.ImportResponse.importedPolicyCount
         } else { '?' }
-        Write-TestStep "Core importpolicies OK (template='$($coreImport.PolicyTemplateXml)', imported $importedCount policies; agent policy.list count=$($coreImport.AgentPolicyList.count))"
+        Write-TestStep "Core importpolicies OK (policyBase='$($coreImport.PolicyBaseSource)', imported $importedCount policies; agent policy.list count=$($coreImport.AgentPolicyList.count))"
         $script:Sa05SmbLabMode = $true
         $destinationPath = $script:Sa05SmbLabDestA
         Write-TestStep "SMB lab mode: jobs use policy A/B SMB in/out folders on disk (see ScanAgentE2eCorePolicy.ps1)"

@@ -53,8 +53,8 @@ function New-Ncp7328SmbLocationBlock {
 
 function New-Ncp7328CorePolicyImportBody {
     param(
-        [Parameter(Mandatory)]
-        [string] $TemplateXmlPath,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
         [string] $TemplatePolicyName = ''
     )
 
@@ -65,17 +65,9 @@ function New-Ncp7328CorePolicyImportBody {
         $script:Ncp7328FolderOutB
     ) -MarkerPrefix 'NCP7328'
 
-    [xml]$doc = Get-Content -LiteralPath $TemplateXmlPath -Encoding UTF8
-    $templatePolicy = Resolve-Sa05TemplatePolicyFromXml `
-        -PolicyNodes $doc.ImportExportContainer.Policies.Policy `
-        -TemplatePolicyName $TemplatePolicyName
-
-    $baseRaw = [string]$templatePolicy.PolicyRawData
-    if ([string]::IsNullOrWhiteSpace($baseRaw)) {
-        throw "Template policy '$($templatePolicy.Name)' in $TemplateXmlPath has empty PolicyRawData."
-    }
-
-    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $baseRaw
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
     $baseRemainConnected = Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
 
     $rawOne = (New-Ncp7328SmbLocationBlock `
@@ -137,14 +129,17 @@ function Import-ScanAgentNcp7328CoreDebugPolicies {
         [string] $HookUrl,
         [Parameter(Mandatory)]
         [string] $Exe,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [int] $AgentPolicyWaitSec = 180,
         [int] $UiWaitMs = 120000
     )
 
-    $templatePath = Resolve-ScanAgentSa05PolicyTemplateXml -OverridePath $PolicyTemplateXml
-    $importBody = New-Ncp7328CorePolicyImportBody -TemplateXmlPath $templatePath -TemplatePolicyName $TemplatePolicyName
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $importBody = New-Ncp7328CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' -TemplatePolicyName $TemplatePolicyName
 
     $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
     Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (NCP7328)'
@@ -164,10 +159,10 @@ function Import-ScanAgentNcp7328CoreDebugPolicies {
     }
 
     return [pscustomobject]@{
-        PolicyTemplateXml = $templatePath
-        ImportResponse    = $import
-        AgentPolicyList   = $policyList
-        PolicyNames       = $expectedNames
+        PolicyBaseSource = $resolvedBase.Source
+        ImportResponse   = $import
+        AgentPolicyList  = $policyList
+        PolicyNames      = $expectedNames
     }
 }
 
@@ -176,6 +171,7 @@ function Initialize-ScanAgentNcp7328CoreTestPolicies {
         [Parameter(Mandatory)]
         [string] $Exe,
         [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
         [string] $PolicyTemplateXml,
         [string] $TemplatePolicyName = '',
         [int] $AgentPolicyWaitSec = 180,
@@ -184,14 +180,14 @@ function Initialize-ScanAgentNcp7328CoreTestPolicies {
 
     $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
     $imported = Import-ScanAgentNcp7328CoreDebugPolicies -HookUrl $pushed.HookUrl -Exe $Exe `
-        -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
         -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
 
     return [pscustomobject]@{
-        HookUrl           = $pushed.HookUrl
-        PolicyTemplateXml = $imported.PolicyTemplateXml
-        PushResponse      = $pushed.PushResponse
-        ImportResponse    = $imported.ImportResponse
-        PolicyNames       = $imported.PolicyNames
+        HookUrl          = $pushed.HookUrl
+        PolicyBaseSource = $imported.PolicyBaseSource
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
+        PolicyNames      = $imported.PolicyNames
     }
 }

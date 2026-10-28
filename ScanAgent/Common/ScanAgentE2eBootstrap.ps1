@@ -27,6 +27,7 @@ $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $commonRoot = Join-Path (Split-Path $CallingScriptRoot -Parent) 'Common'
 foreach ($name in @(
         'ScanAgentE2eFixtures.ps1',
+        'ScanAgentE2eEmbeddedPolicyBase.ps1',
         'ScanAgentE2ePs51.ps1',
         'ScanAgentE2eDestination.ps1',
         'Report-ScanAgentTestPlatformResult.ps1',
