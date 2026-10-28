@@ -59,6 +59,27 @@ function ConvertTo-ScanAgentCoreDebugHookHttpErrorMessage {
     $detail = $ErrorRecord.Exception.Message
     if ($ErrorRecord.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($ErrorRecord.ErrorDetails.Message)) {
         $detail = $ErrorRecord.ErrorDetails.Message.Trim()
+    }
+    elseif ($ErrorRecord.Exception -is [System.Net.WebException]) {
+        $web = $ErrorRecord.Exception
+        if ($null -ne $web.Response) {
+            try {
+                $stream = $web.Response.GetResponseStream()
+                if ($null -ne $stream) {
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $body = $reader.ReadToEnd()
+                    if (-not [string]::IsNullOrWhiteSpace($body)) {
+                        $detail = $body.Trim()
+                    }
+                }
+            }
+            catch {
+                # Keep exception message.
+            }
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($detail)) {
         try {
             $parsed = $detail | ConvertFrom-Json
             if ($parsed.PSObject.Properties.Name -contains 'error' -and -not [string]::IsNullOrWhiteSpace([string]$parsed.error)) {
@@ -71,7 +92,7 @@ function ConvertTo-ScanAgentCoreDebugHookHttpErrorMessage {
         return "Core debug hook $Command failed: $detail"
     }
 
-    return "Core debug hook $Command failed: $detail"
+    return "Core debug hook $Command failed: $($ErrorRecord.Exception.Message)"
 }
 
 function Invoke-ScanAgentCoreDebugHook {
@@ -477,8 +498,8 @@ function Disconnect-AllCoreAgentsForRefresh {
         [int] $GatewayWaitSec = 120
     )
 
-    $down = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'commdown'
-    Assert-ScanAgentCoreDebugHookResponse -Response $down -Step 'commdown'
+    $down = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockon'
+    Assert-ScanAgentCoreDebugHookResponse -Response $down -Step 'agentcommblockon (commdown)'
     $dropped = if ($down.PSObject.Properties.Name -contains 'droppedSessions') { $down.droppedSessions } else { '?' }
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commdown: all agent sessions disconnected (droppedSessions=$dropped); holding ${DisconnectHoldSec}s before commup."
 
@@ -486,8 +507,8 @@ function Disconnect-AllCoreAgentsForRefresh {
         Start-Sleep -Seconds $DisconnectHoldSec
     }
 
-    $up = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'commup'
-    Assert-ScanAgentCoreDebugHookResponse -Response $up -Step 'commup'
+    $up = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockoff'
+    Assert-ScanAgentCoreDebugHookResponse -Response $up -Step 'agentcommblockoff (commup)'
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commup: agent admissions re-enabled; waiting for Scan Agent gateway reconnect."
 
     Start-Sleep -Milliseconds 500

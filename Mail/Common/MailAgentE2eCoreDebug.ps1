@@ -117,10 +117,10 @@ function Wait-MailAgentCoreReady {
 
 function Set-MailAgentCoreAgentCommDown {
     param([string] $BaseUrl = '')
-    return Invoke-MailAgentCoreDebugHook -Command 'commdown' -BaseUrl $BaseUrl
+    return Invoke-MailAgentCoreDebugHook -Command 'agentcommblockon' -BaseUrl $BaseUrl
 }
 
 function Set-MailAgentCoreAgentCommUp {
     param([string] $BaseUrl = '')
-    return Invoke-MailAgentCoreDebugHook -Command 'commup' -BaseUrl $BaseUrl
+    return Invoke-MailAgentCoreDebugHook -Command 'agentcommblockoff' -BaseUrl $BaseUrl
 }
