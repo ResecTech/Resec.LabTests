@@ -59,8 +59,9 @@ After a successful deploy, scripts write **`{TargetFolder}\.lab-deploy.json`** (
 ```powershell
 LabTestRunner.exe list-deploy-scripts
 LabTestRunner.exe deploy --script ScanAgent
+LabTestRunner.exe deploy --script FileTypeDetection --undeploy
 LabTestRunner.exe deploy --script FileTypeDetection --script Core
 LabTestRunner.exe deploy --gui
 ```
 
-Select one or more scripts in the Deploy UI or repeat `--script` on the CLI. Download builds from **Product catalog** first; branch and version are taken from the newest matching local folder at run time.
+Select one or more scripts in the Deploy UI (**Run selected** or **Undeploy selected**) or repeat `--script` on the CLI. Download builds from **Product catalog** first; branch and version are taken from the selected local build folder (Deploy UI) or the newest matching folder (CLI).
