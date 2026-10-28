@@ -49,6 +49,31 @@ function Get-ScanAgentCoreDebugHookUrl {
     return 'https://localhost:4504/debug/hook'
 }
 
+function ConvertTo-ScanAgentCoreDebugHookHttpErrorMessage {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Command,
+        $ErrorRecord
+    )
+
+    $detail = $ErrorRecord.Exception.Message
+    if ($ErrorRecord.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($ErrorRecord.ErrorDetails.Message)) {
+        $detail = $ErrorRecord.ErrorDetails.Message.Trim()
+        try {
+            $parsed = $detail | ConvertFrom-Json
+            if ($parsed.PSObject.Properties.Name -contains 'error' -and -not [string]::IsNullOrWhiteSpace([string]$parsed.error)) {
+                return "Core debug hook $Command failed: $($parsed.error)"
+            }
+        }
+        catch {
+            # Body was not JSON; use raw text.
+        }
+        return "Core debug hook $Command failed: $detail"
+    }
+
+    return "Core debug hook $Command failed: $detail"
+}
+
 function Invoke-ScanAgentCoreDebugHook {
     param(
         [Parameter(Mandatory)]
@@ -61,18 +86,23 @@ function Invoke-ScanAgentCoreDebugHook {
 
     Enable-ScanAgentCoreDebugTlsBypass
 
-    if ($BodyObject) {
-        $payload = $BodyObject.Clone()
-        $payload['command'] = $Command
-        $json = $payload | ConvertTo-Json -Depth 60 -Compress
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-        return Invoke-RestMethod -Uri $HookUrl -Method Post -Body $bytes `
-            -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
-    }
+    try {
+        if ($BodyObject) {
+            $payload = $BodyObject.Clone()
+            $payload['command'] = $Command
+            $json = $payload | ConvertTo-Json -Depth 60 -Compress
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            return Invoke-RestMethod -Uri $HookUrl -Method Post -Body $bytes `
+                -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
+        }
 
-    $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
-    $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
-    return Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+        $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
+        $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
+        return Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+    }
+    catch {
+        throw (ConvertTo-ScanAgentCoreDebugHookHttpErrorMessage -Command $Command -ErrorRecord $_)
+    }
 }
 
 function Assert-ScanAgentCoreDebugHookResponse {
@@ -514,6 +544,7 @@ function Import-ScanAgentSa05CoreDebugPolicies {
 
     $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
         -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core importpolicies policy base: $($resolvedBase.Source)"
     $importBody = New-Sa05CorePolicyImportBody `
         -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
         -TemplatePolicyName $TemplatePolicyName `

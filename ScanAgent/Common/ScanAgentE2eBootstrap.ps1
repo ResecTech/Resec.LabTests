@@ -20,11 +20,74 @@ if ([string]::IsNullOrWhiteSpace($script:SaE2eScanAgentExe)) {
     $script:SaE2eScanAgentExe = 'C:\Program Files\Resec Technologies\Resec Scan Agent\Resec.Agent.ScanAgent.exe'
 }
 
+# Bump when shared Scan Agent E2E Common behavior changes (Core policy import, bootstrap, debug helpers).
+$script:ScanAgentE2eLabBundleVersion = '2026.10.28.1'
+
+function Get-ScanAgentE2eLabBundleGitRevision {
+    param(
+        [Parameter(Mandatory)]
+        [string] $LabTestsRoot
+    )
+
+    if (-not (Test-Path -LiteralPath (Join-Path $LabTestsRoot '.git'))) {
+        return $null
+    }
+
+    try {
+        $sha = & git -C $LabTestsRoot rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sha)) {
+            return $null
+        }
+        return $sha.Trim()
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-ScanAgentE2eCallingTestScriptName {
+    foreach ($frame in @(Get-PSCallStack)) {
+        if ($null -eq $frame) {
+            continue
+        }
+
+        $path = $null
+        if ($frame.PSObject.Properties.Name -contains 'ScriptName') {
+            $path = [string]$frame.ScriptName
+        }
+
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            continue
+        }
+
+        if ($path -match '[\\/]ScanAgent[\\/]P\d+[\\/]' -and $path -like '*.ps1') {
+            return [System.IO.Path]::GetFileNameWithoutExtension($path)
+        }
+    }
+
+    return $null
+}
+
+function Write-ScanAgentE2eLabBundleVersion {
+    param(
+        [string] $TestId = '',
+        [Parameter(Mandatory)]
+        [string] $LabTestsRoot
+    )
+
+    $git = Get-ScanAgentE2eLabBundleGitRevision -LabTestsRoot $LabTestsRoot
+    $gitSuffix = if ($git) { " git=$git" } else { '' }
+    $testSuffix = if ([string]::IsNullOrWhiteSpace($TestId)) { '' } else { " test=$TestId" }
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-Host "[$timestamp] [STEP] Resec.LabTests Scan Agent E2E bundle version $($script:ScanAgentE2eLabBundleVersion) (root='$LabTestsRoot'$gitSuffix$testSuffix)"
+}
+
 $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 . (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
 . (Join-Path $labTestsRoot 'Common\LabFixtures.ps1')
 
 $commonRoot = Join-Path (Split-Path $CallingScriptRoot -Parent) 'Common'
+
 foreach ($name in @(
         'ScanAgentE2eFixtures.ps1',
         'ScanAgentE2eEmbeddedPolicyBase.ps1',
@@ -43,3 +106,6 @@ foreach ($name in @(
 }
 
 Initialize-ScanAgentE2eTestPlatformFromLabConfig
+
+$testScriptName = Get-ScanAgentE2eCallingTestScriptName
+Write-ScanAgentE2eLabBundleVersion -TestId $testScriptName -LabTestsRoot $labTestsRoot
