@@ -388,6 +388,52 @@ NumPropType_MaxScannersDefinitionAge=168
     return $raw
 }
 
+function New-SaLabDisabledFormatTransformationsFacet {
+    return @"
+;Facet Format Transformations:Format Transformations
+NumPropType_OfficeTransformation=0
+NumPropType_PdfTransformation=0
+NumPropType_ImageTransformation=0
+NumPropType_HtmlTransformation=0
+NumPropType_VisioTransformation=0
+NumPropType_ImagePixelThreshold=0
+
+"@
+}
+
+function New-SaLabDisabledTransformationActionsFacet {
+    <#
+      Disables CDR / reconstruction action tiers (lab pass-through sanitization).
+    #>
+    return @"
+;Facet Transformation Actions:Transformation Actions
+Actions Settings=Pdf:Critical=False|Pdf:High=False|Pdf:Medium=False|Pdf:Low=False|Word:Critical=False|Word:High=False|Word:Medium=False|Word:Low=False|Spreadsheet:Critical=False|Spreadsheet:High=False|Spreadsheet:Medium=False|Spreadsheet:Low=False|Presentation:Critical=False|Presentation:High=False|Presentation:Medium=False|Presentation:Low=False|Visio:High=False|Visio:Medium=False|Visio:Low=False|Image:High=False|Image:Medium=False|Image:Low=False|Html:Critical=False|Html:High=False|Html:Medium=False|Html:Low=False|Email:Critical=False|Email:High=False|Email:Medium=False|Email:Low=False|Svg:Critical=False|Svg:High=False|Svg:Medium=False|MetafileImage=False|Multitiff=False|Csv:Critical=False|Csv:Medium=False|Chm=False|Ichitaro:Critical=False|Ichitaro:High=False|Ichitaro:Medium=False|JSON=False|Mp3=False|OpenOfficeText:High=False|OpenOfficeText:Medium=False|OpenOfficeSpreadsheet:High=False|OpenOfficeSpreadsheet:Medium=False|OpenOfficePresentation:High=False|OpenOfficePresentation:Medium=False|OpenOfficeGraphics=False|AutoCad=False
+NumPropType_VerifySignatureWhenIgnoringSignedFile=False
+NumPropType_ExtractPdfImages=False
+NumPropType_ProcessJtdc=False
+BoolPropType_RetainOriginalFile=False
+
+"@
+}
+
+function Set-SaLabPolicyRawDisableCdrAndTransformations {
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $PolicyRawData -FacetHeader 'Format Transformations:Format Transformations'
+    $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'Transformation Actions:Transformation Actions'
+    $raw += New-SaLabDisabledFormatTransformationsFacet
+    $raw += New-SaLabDisabledTransformationActionsFacet
+    return $raw
+}
+
+function Set-Sa09PolicyRawLabSanitizePolicy {
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    $raw = Set-Sa07PolicyRawPermissiveLabScanAgentPolicy -PolicyRawData $PolicyRawData
+    $raw = Set-SaLabPolicyRawDisableCdrAndTransformations -PolicyRawData $raw
+    return $raw
+}
+
 function Set-Sa05PolicyRawRemainConnected {
     <#
       Scan Agent idle disconnect (30s) and gateway auto-reconnect follow NumPropType_AutoReconnect on the current policy.
@@ -1167,5 +1213,180 @@ function Initialize-ScanAgentSa07CoreTestPolicy {
         PushResponse      = $pushed.PushResponse
         ImportResponse    = $imported.ImportResponse
         AgentPolicyList   = $imported.AgentPolicyList
+    }
+}
+
+# Default SA-09 lab policy (Local + SMB sources and destinations; same Core SMB folder mapping as lab agent host).
+$script:Sa09DefaultPolicyName = 'Test9-smb-local'
+$script:Sa09SmbInFolder = 'c:\test\SA-09-smb-in'
+$script:Sa09SmbOutFolder = 'c:\test\SA-09-smb-out'
+$script:Sa09LocalOutFolder = 'c:\test\SA-09-local-out'
+$script:Sa09SmbStoreIn = 'sa09-smb-in'
+$script:Sa09SmbStoreOut = 'sa09-smb-out'
+
+function New-Sa09LocalAndSmbLocationBlock {
+    param(
+        [Parameter(Mandatory)]
+        [string] $SmbInFolder,
+        [Parameter(Mandatory)]
+        [string] $SmbOutFolder,
+        [Parameter(Mandatory)]
+        [string] $SmbStoreIn,
+        [Parameter(Mandatory)]
+        [string] $SmbStoreOut
+    )
+
+    $block = New-Sa07LocalSourceFacet
+    $block += New-Sa05SmbSourceFacet -StoreName $SmbStoreIn -RootFolder $SmbInFolder -SortOrder 2
+    $block += New-Sa07LocalDestinationFacet
+    $block += New-Sa05SmbDestinationFacet -StoreName $SmbStoreOut -RootFolder $SmbOutFolder -SortOrder 4
+    return $block
+}
+
+function New-Sa09CorePolicyImportBody {
+    param(
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test9-smb-local',
+        [string] $SmbInFolder = 'c:\test\SA-09-smb-in',
+        [string] $SmbOutFolder = 'c:\test\SA-09-smb-out',
+        [string] $SmbStoreIn = 'sa09-smb-in',
+        [string] $SmbStoreOut = 'sa09-smb-out',
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa09'
+    )
+
+    Ensure-Sa05SmbLabFolders -FolderPaths @($SmbInFolder, $SmbOutFolder) -MarkerPrefix 'SA-09'
+    $localOut = [System.IO.Path]::GetFullPath('c:\test\SA-09-local-out')
+    if (-not (Test-Path -LiteralPath $localOut)) {
+        New-Item -ItemType Directory -Path $localOut -Force | Out-Null
+    }
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
+    $baseRaw = Set-Sa09PolicyRawLabSanitizePolicy -PolicyRawData $baseRaw
+    $raw = New-Sa09LocalAndSmbLocationBlock `
+        -SmbInFolder $SmbInFolder -SmbOutFolder $SmbOutFolder `
+        -SmbStoreIn $SmbStoreIn -SmbStoreOut $SmbStoreOut
+    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyId = 9109
+
+    return [ordered]@{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id             = $policyId
+                name           = $PolicyName
+                displayName    = 'Debug SA-09 Local+SMB (same Core SMB path)'
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $raw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'scan_agent'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Import-ScanAgentSa09CoreDebugPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test9-smb-local',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $AgentDisconnectHoldSec = 5,
+        [int] $UiWaitMs = 120000
+    )
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core importpolicies policy base: $($resolvedBase.Source)"
+    $importBody = New-Sa09CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
+        -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName
+
+    $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
+    Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-09)'
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe -DisconnectHoldSec $AgentDisconnectHoldSec
+
+    $null = Wait-ScanAgentPolicyListContainsNames -Exe $Exe -PolicyNames @($PolicyName) `
+        -TimeoutSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    $policyList = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.list')
+    if ($policyList.ok -ne $true) {
+        throw 'policy.list failed after SA-09 Core import and agent reconnect.'
+    }
+
+    $listedNames = @($policyList.policies | ForEach-Object { [string]$_.name })
+    if ($listedNames -notcontains $PolicyName) {
+        throw "Agent policy.list is missing policy '$PolicyName'. Listed: $($listedNames -join ', ')."
+    }
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.list includes $PolicyName."
+
+    return [pscustomobject]@{
+        PolicyBaseSource = $resolvedBase.Source
+        PolicyName       = $PolicyName
+        SmbInFolder      = $script:Sa09SmbInFolder
+        SmbOutFolder     = $script:Sa09SmbOutFolder
+        LocalOutFolder   = $script:Sa09LocalOutFolder
+        SmbStoreIn       = $script:Sa09SmbStoreIn
+        SmbStoreOut      = $script:Sa09SmbStoreOut
+        ImportResponse   = $import
+        AgentPolicyList  = $policyList
+    }
+}
+
+function Initialize-ScanAgentSa09CoreTestPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test9-smb-local',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $UiWaitMs = 120000
+    )
+
+    $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    $imported = Import-ScanAgentSa09CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    return [pscustomobject]@{
+        HookUrl          = $pushed.HookUrl
+        PolicyBaseSource = $imported.PolicyBaseSource
+        PolicyName       = $imported.PolicyName
+        SmbInFolder      = $imported.SmbInFolder
+        SmbOutFolder     = $imported.SmbOutFolder
+        LocalOutFolder   = $imported.LocalOutFolder
+        SmbStoreIn       = $imported.SmbStoreIn
+        SmbStoreOut      = $imported.SmbStoreOut
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
+        AgentPolicyList  = $imported.AgentPolicyList
     }
 }

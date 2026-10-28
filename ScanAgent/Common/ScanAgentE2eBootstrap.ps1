@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($script:SaE2eScanAgentExe)) {
 }
 
 # Bump when shared Scan Agent E2E Common behavior changes (Core policy import, bootstrap, debug helpers).
-$script:ScanAgentE2eLabBundleVersion = '2026.10.28.2'
+$script:ScanAgentE2eLabBundleVersion = '2026.10.28.4'
 
 function Get-ScanAgentE2eLabBundleGitRevision {
     param(
