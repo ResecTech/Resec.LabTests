@@ -29,6 +29,7 @@ if (-not (Test-Path -LiteralPath $stateScript -PathType Leaf)) {
 }
 
 . $stateScript
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Common\LabTestDeployFixtures.ps1')
 
 function Resolve-FtdPackageZipPath {
     param(
@@ -111,15 +112,13 @@ if (Test-Path -Path 'Variable:\version') {
 }
 
 $product = if ([string]::IsNullOrWhiteSpace($ProductName)) { 'FileTypeDetection' } else { $ProductName.Trim() }
+$deployScriptId = 'FileTypeDetection'
 
 switch ($Action) {
     'is_deployed' {
-        if (Test-LabDeployInstalled -TargetFolder $targetPath -ProductName $product -BranchName $BranchName -VersionName $VersionName) {
-            Write-Host "FileTypeDetection is deployed ($BranchName / $VersionName) under $targetPath"
-            exit 0
-        }
-
-        Write-Host "FileTypeDetection is not deployed for ($BranchName / $VersionName) under $targetPath"
+        $deployed = Test-LabDeployIsBuildDeployed -TargetFolder $targetPath -DeployScriptId $deployScriptId -ProductName $product -BranchName $BranchName -VersionName $VersionName
+        Write-LabDeployRequirementFixtureJson -ComponentName $deployScriptId -Deployed $deployed
+        if ($deployed) { exit 0 }
         exit 1
     }
 

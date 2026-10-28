@@ -37,7 +37,7 @@ function Get-LabDeployState {
     }
 }
 
-function Test-LabDeployInstalled {
+function Test-LabDeployStateMatchesBuild {
     param(
         [Parameter(Mandatory)] [string] $TargetFolder,
         [string] $ProductName,
@@ -54,12 +54,6 @@ function Test-LabDeployInstalled {
         return $false
     }
 
-    $files = @(Get-ChildItem -LiteralPath ([System.IO.Path]::GetFullPath($TargetFolder)) -Recurse -File -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne '.lab-deploy.json' })
-    if ($files.Count -eq 0) {
-        return $false
-    }
-
     if (-not (Test-LabDeployFieldMatches -Expected $ProductName -Actual ([string]$state.product))) {
         return $false
     }
@@ -73,6 +67,71 @@ function Test-LabDeployInstalled {
     }
 
     return $true
+}
+
+function Test-LabDeployHasPayloadFiles {
+    param(
+        [Parameter(Mandatory)] [string] $TargetFolder
+    )
+
+    $root = [System.IO.Path]::GetFullPath($TargetFolder)
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue) {
+        if ($file.Name -ne '.lab-deploy.json') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-LabDeployPlaceholderScriptId {
+    param(
+        [Parameter(Mandatory)] [string] $DeployScriptId
+    )
+
+    $id = $DeployScriptId.Trim()
+    return [string]::Equals($id, 'ScanAgent', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($id, 'Mail', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($id, 'Core', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-LabDeployIsBuildDeployed {
+    param(
+        [Parameter(Mandatory)] [string] $TargetFolder,
+        [string] $DeployScriptId,
+        [string] $ProductName,
+        [string] $BranchName,
+        [string] $VersionName
+    )
+
+    if (-not (Test-LabDeployStateMatchesBuild -TargetFolder $TargetFolder -ProductName $ProductName -BranchName $BranchName -VersionName $VersionName)) {
+        return $false
+    }
+
+    if (Test-LabDeployHasPayloadFiles -TargetFolder $TargetFolder) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DeployScriptId) -and (Test-LabDeployPlaceholderScriptId -DeployScriptId $DeployScriptId)) {
+        return $true
+    }
+
+    return $false
+}
+
+function Test-LabDeployInstalled {
+    param(
+        [Parameter(Mandatory)] [string] $TargetFolder,
+        [string] $ProductName,
+        [string] $BranchName,
+        [string] $VersionName
+    )
+
+    if (-not (Test-LabDeployStateMatchesBuild -TargetFolder $TargetFolder -ProductName $ProductName -BranchName $BranchName -VersionName $VersionName)) {
+        return $false
+    }
+
+    return Test-LabDeployHasPayloadFiles -TargetFolder $TargetFolder
 }
 
 function Test-LabDeployVersionTokenEquivalent {

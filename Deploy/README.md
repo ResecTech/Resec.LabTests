@@ -49,10 +49,12 @@ param(
 
 After a successful deploy, scripts write **`{TargetFolder}\.lab-deploy.json`** (product, branch, version, `deployedUtc`). Shared helpers live in **`_DeployState.ps1`** (not listed as a deploy script).
 
-- **`is_deployed`**: exit **0** if state matches and payload files exist; exit **1** if not deployed.
+- **`is_deployed`**: exit **0** if state matches and payload files exist (placeholder scripts may be state-only); exit **1** if not deployed. Writes one JSON object to **stdout**: `{ "componentName", "requiresRunning": false, "state": { "deployed", "running" } }` (`running` reflects whether the component process is up).
 - **`un_deploy`**: remove installed files and delete the state file.
 
 **FileTypeDetection.ps1** implements full deploy (zip extract), state, and un-deploy. Other scripts use placeholders but follow the same action contract.
+
+Before running a test, **Lab Test Runner** runs **`Common\Check-LabTestDeployFixtures.ps1`**, which evaluates **`Get-LabTestDeployRequirements`** and prints a JSON **array** of the same shape (one entry per required component). Exit **0** when every requirement is satisfied.
 
 ## CLI example
 

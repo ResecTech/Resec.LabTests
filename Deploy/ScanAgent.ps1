@@ -14,18 +14,17 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '_DeployState.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Common\LabTestDeployFixtures.ps1')
 
 $product = if ([string]::IsNullOrWhiteSpace($ProductName)) { 'ScanAgent' } else { $ProductName.Trim() }
+$deployScriptId = 'ScanAgent'
 $targetPath = [System.IO.Path]::GetFullPath($TargetFolder)
 
 switch ($Action) {
     'is_deployed' {
-        if (Test-LabDeployInstalled -TargetFolder $targetPath -ProductName $product -BranchName $BranchName -VersionName $VersionName) {
-            Write-Host "$product is deployed ($BranchName / $VersionName)"
-            exit 0
-        }
-
-        Write-Host "$product is not deployed for ($BranchName / $VersionName)"
+        $deployed = Test-LabDeployIsBuildDeployed -TargetFolder $targetPath -DeployScriptId $deployScriptId -ProductName $product -BranchName $BranchName -VersionName $VersionName
+        Write-LabDeployRequirementFixtureJson -ComponentName $deployScriptId -Deployed $deployed
+        if ($deployed) { exit 0 }
         exit 1
     }
 
