@@ -60,20 +60,60 @@ function Test-LabDeployInstalled {
         return $false
     }
 
-    foreach ($pair in @(
-            @{ Expected = $ProductName; Actual = [string]$state.product },
-            @{ Expected = $BranchName; Actual = [string]$state.branch },
-            @{ Expected = $VersionName; Actual = [string]$state.version })) {
-        if ([string]::IsNullOrWhiteSpace($pair.Expected)) {
-            continue
-        }
+    if (-not (Test-LabDeployFieldMatches -Expected $ProductName -Actual ([string]$state.product))) {
+        return $false
+    }
 
-        if (-not [string]::Equals($pair.Expected.Trim(), $pair.Actual.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $false
-        }
+    if (-not (Test-LabDeployFieldMatches -Expected $BranchName -Actual ([string]$state.branch))) {
+        return $false
+    }
+
+    if (-not (Test-LabDeployFieldMatches -Expected $VersionName -Actual ([string]$state.version) -Version)) {
+        return $false
     }
 
     return $true
+}
+
+function Test-LabDeployVersionTokenEquivalent {
+    param(
+        [string] $Expected,
+        [string] $Actual
+    )
+
+    $left = $Expected.Trim()
+    $right = $Actual.Trim()
+    if ([string]::Equals($left, $right, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+
+    if ($left.Length -gt 1 -and ($left[0] -eq 'V' -or $left[0] -eq 'v')) {
+        $left = $left.Substring(1)
+    }
+
+    if ($right.Length -gt 1 -and ($right[0] -eq 'V' -or $right[0] -eq 'v')) {
+        $right = $right.Substring(1)
+    }
+
+    return [string]::Equals($left, $right, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-LabDeployFieldMatches {
+    param(
+        [string] $Expected,
+        [string] $Actual,
+        [switch] $Version
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Expected)) {
+        return $true
+    }
+
+    if ($Version) {
+        return Test-LabDeployVersionTokenEquivalent -Expected $Expected -Actual $Actual
+    }
+
+    return [string]::Equals($Expected.Trim(), $Actual.Trim(), [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Set-LabDeployState {

@@ -1,0 +1,1 @@
+Lab FileTypeDetection fixture — plain text sample for deployed DLL smoke tests.

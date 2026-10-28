@@ -1,0 +1,8 @@
+{
+  "cases": [
+    {
+      "relativePath": "sample.txt",
+      "expectedExtensionContains": "txt"
+    }
+  ]
+}

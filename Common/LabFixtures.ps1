@@ -84,3 +84,7 @@ function Get-LabCoreQrNcp7330FixtureRoot {
 function Get-LabDefaultCdrFixtureFolder {
     return Get-LabFixturePath -RelativePath 'CDR'
 }
+
+function Get-LabFileTypeDetectionFixturesRoot {
+    return Get-LabFixturePath -RelativePath 'FileTypeDetection'
+}

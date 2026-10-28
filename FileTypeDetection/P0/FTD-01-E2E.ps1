@@ -1,25 +1,22 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Runs the complete FileTypeDetection unit-test suite and reports one aggregate P0 result.
+  P0 smoke test: detect file types on lab fixtures using the deployed FileTypeDetection build.
 
 .DESCRIPTION
-  The test runner deliberately does not use fail-fast. It parses the generated TRX and includes
-  every failed unit test in the Test Platform result message and run log.
+  Uses the Lab Test Runner deploy under LAB_PRODUCTION_ROOT (not the FTD git repo).
+  Fixture list: Fixtures\FileTypeDetection\manifest.json
 
   Test Platform configuration:
     TESTPLATFORM_BASE_URL          Optional; defaults to the shared dev-test endpoint.
     TESTPLATFORM_FUNCTION_KEY      Required to report (unless TESTPLATFORM_DISABLE=1). Alias: TESTPLATFORM_CODE.
     TESTPLATFORM_COMPONENT_NAME    Optional; defaults to FileTypeDetection.
     TESTPLATFORM_DISABLE           Set to 1 to run without reporting.
-    TESTPLATFORM_COMPONENT_VERSION Optional; otherwise read from the built FTD assembly.
+    TESTPLATFORM_COMPONENT_VERSION Optional; otherwise read from deployed Resec.FileTypeDetection.dll.
     BUILD_BUILDID / GITHUB_RUN_ID  Optional build and run correlation.
 #>
 [CmdletBinding()]
-param(
-    [ValidateSet('Debug', 'Release')]
-    [string] $Configuration = 'Debug'
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -30,7 +27,6 @@ function Write-FtdRunLog {
         [string] $Message
     )
 
-    # Write-Output is captured by Lab Test Runner stdout redirection; Write-Host may not be.
     Write-Output $Message
 }
 
@@ -46,13 +42,9 @@ $defaultBaseUrl = 'https://test-results-eus2-94505680.azurewebsites.net'
 $startedAtUtc = [DateTimeOffset]::UtcNow
 $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\'))
 . (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
-$repositoryRoot = Get-LabFileTypeDetectionProductRoot
-$testProjectRelative = 'src\FileTypeDetection\Resec.FileTypeDetection.Tests\Resec.FileTypeDetection.Tests.csproj'
-$testProject = Join-Path $repositoryRoot $testProjectRelative
-$resultsDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "FTD-E2E-$([Guid]::NewGuid().ToString('N'))"
-$trxFileName = "$testId.trx"
-$trxPath = Join-Path $resultsDirectory $trxFileName
-$consoleLogPath = Join-Path $resultsDirectory "$testId.log"
+. (Join-Path $labTestsRoot 'Common\LabFixtures.ps1')
+. (Join-Path $labTestsRoot 'Common\LabFtdDeploy.ps1')
+. (Join-Path $labTestsRoot 'Common\LabFtdDetection.ps1')
 
 function Initialize-FtdTestPlatformFromLabConfig {
     if ($env:TESTPLATFORM_DISABLE -eq '1') {
@@ -113,60 +105,23 @@ function Get-TestPlatformConfig {
     }
 }
 
-function Get-ComponentVersion {
+function Get-DeployedComponentVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string] $DeployFolder
+    )
+
     if (-not [string]::IsNullOrWhiteSpace($env:TESTPLATFORM_COMPONENT_VERSION)) {
         return $env:TESTPLATFORM_COMPONENT_VERSION.Trim()
     }
 
-    $assemblyPath = Join-Path $repositoryRoot "src\FileTypeDetection\FileTypeDetection\bin\$Configuration\net10.0\Resec.FileTypeDetection.dll"
-    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
-        return $null
-    }
-
+    $assemblyPath = Get-LabDeployedFileTypeDetectionAssemblyPath -DeployFolder $DeployFolder
     $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($assemblyPath).FileVersion
     if ([string]::IsNullOrWhiteSpace($version)) {
         return $null
     }
 
     return $version.Trim()
-}
-
-function Get-TrxResults {
-    param(
-        [Parameter(Mandatory)]
-        [string] $Path
-    )
-
-    [xml] $trx = [System.IO.File]::ReadAllText($Path)
-    $resultNodes = @($trx.SelectNodes("//*[local-name()='UnitTestResult']"))
-    $failedNodes = @($resultNodes | Where-Object { $_.outcome -eq 'Failed' })
-    $failureDetails = New-Object System.Collections.Generic.List[string]
-
-    foreach ($failure in $failedNodes) {
-        $name = [string] $failure.testName
-        $messageNode = $failure.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='Message']")
-        $stackNode = $failure.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='StackTrace']")
-        $message = if ($null -eq $messageNode -or [string]::IsNullOrWhiteSpace($messageNode.InnerText)) {
-            'No failure message was recorded.'
-        }
-        else {
-            $messageNode.InnerText.Trim()
-        }
-
-        $detail = "$name$([Environment]::NewLine)$message"
-        if ($null -ne $stackNode -and -not [string]::IsNullOrWhiteSpace($stackNode.InnerText)) {
-            $detail += "$([Environment]::NewLine)$($stackNode.InnerText.Trim())"
-        }
-        $failureDetails.Add($detail)
-    }
-
-    return [pscustomobject]@{
-        Total          = $resultNodes.Count
-        Passed         = @($resultNodes | Where-Object { $_.outcome -eq 'Passed' }).Count
-        Failed         = $failedNodes.Count
-        Skipped        = @($resultNodes | Where-Object { $_.outcome -eq 'NotExecuted' }).Count
-        FailureDetails = @($failureDetails)
-    }
 }
 
 function Send-TestPlatformResult {
@@ -234,74 +189,97 @@ function Get-NormalizedTestPlatformFunctionKey {
     return $key
 }
 
-New-Item -ItemType Directory -Path $resultsDirectory -Force | Out-Null
+function Get-FtdLabCases {
+    $fixturesRoot = Get-LabFileTypeDetectionFixturesRoot
+    $manifestPath = Join-Path $fixturesRoot 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Missing FTD lab manifest: $manifestPath"
+    }
 
-$dotnetExitCode = 1
-$result = $null
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $manifest.cases -or @($manifest.cases).Count -eq 0) {
+        throw "FTD lab manifest has no cases: $manifestPath"
+    }
+
+    return @($manifest.cases)
+}
+
+$runLogBuilder = New-Object System.Text.StringBuilder
+function Add-FtdRunLogLine {
+    param([string] $Line)
+    [void]$runLogBuilder.AppendLine($Line)
+    Write-FtdRunLog $Line
+}
+
+$passed = $false
 $failureMessage = $null
-$runLog = $null
+$deployFolder = $null
+$componentVersion = $null
 
 try {
-    $ftdVersion = Get-ComponentVersion
-    if ([string]::IsNullOrWhiteSpace($ftdVersion)) {
-        Write-Host 'FileTypeDetection version: (not found — build the product or set TESTPLATFORM_COMPONENT_VERSION)'
+    $deployInfo = Get-LabDeployedProductDeployFolder -DeployScriptId 'FileTypeDetection'
+    $deployFolder = $deployInfo.DeployFolder
+    $componentVersion = Get-DeployedComponentVersion -DeployFolder $deployFolder
+
+    Add-FtdRunLogLine "Deployed FileTypeDetection: $($deployInfo.Label)"
+    Add-FtdRunLogLine "Deploy folder: $deployFolder"
+    if ([string]::IsNullOrWhiteSpace($componentVersion)) {
+        Add-FtdRunLogLine 'FileTypeDetection version: (not found on deployed assembly)'
     }
     else {
-        Write-Host "FileTypeDetection version: $ftdVersion"
+        Add-FtdRunLogLine "FileTypeDetection version: $componentVersion"
     }
 
-    Write-Host "Running complete FTD unit-test suite: $testProject"
-    Push-Location $repositoryRoot
-    try {
-        # Microsoft.Testing.Platform (FTD global.json) requires --project and MTP flags; cwd must be the FTD repo root.
-        & dotnet test --project $testProjectRelative --configuration $Configuration --results-directory $resultsDirectory `
-            --minimum-expected-tests 1 --no-ansi --no-progress --stop-on-fail off `
-            --report-xunit-trx --report-xunit-trx-filename $trxFileName 2>&1 |
-            Tee-Object -FilePath $consoleLogPath
-        $dotnetExitCode = $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
+    $fixturesRoot = Get-LabFileTypeDetectionFixturesRoot
+    Add-FtdRunLogLine "Fixtures root: $fixturesRoot"
+
+    $failures = New-Object System.Collections.Generic.List[string]
+    $caseIndex = 0
+    foreach ($case in Get-FtdLabCases) {
+        $caseIndex++
+        $relativePath = [string]$case.relativePath
+        $expected = [string]$case.expectedExtensionContains
+        if ([string]::IsNullOrWhiteSpace($relativePath) -or [string]::IsNullOrWhiteSpace($expected)) {
+            $failures.Add("Case ${caseIndex}: manifest entry is missing relativePath or expectedExtensionContains.")
+            continue
+        }
+
+        $fixturePath = Join-Path $fixturesRoot $relativePath
+        Add-FtdRunLogLine "[$caseIndex] Detecting: $relativePath"
+
+        $detection = Invoke-LabDeployedFileTypeDetection -DeployFolder $deployFolder -FilePath $fixturePath
+        $matched = $false
+        if ($detection.Mode -eq 'console') {
+            Add-FtdRunLogLine "[$caseIndex] Result: $($detection.RawOutput)"
+            $matched = Test-LabFtdConsoleOutputMatchesExtension -ConsoleOutput $detection.RawOutput -ExpectedExtensionContains $expected
+        }
+        else {
+            Add-FtdRunLogLine "[$caseIndex] Result extensions: $($detection.RawOutput)"
+            $matched = Test-LabFtdDetectedExtensionMatches -FileTypeInfo $detection.FileTypeInfo -ExpectedExtensionContains $expected
+        }
+
+        if (-not $matched) {
+            $failures.Add("Case ${caseIndex} ($relativePath): expected extension containing '$expected'; got '$($detection.RawOutput)'.")
+        }
     }
 
-    if (Test-Path -LiteralPath $trxPath -PathType Leaf) {
-        $result = Get-TrxResults -Path $trxPath
-        $summary = "Total: $($result.Total), Passed: $($result.Passed), Failed: $($result.Failed), Skipped: $($result.Skipped)"
-        Write-Host $summary
+    if ($failures.Count -gt 0) {
+        $failureMessage = ($failures -join [Environment]::NewLine)
+        throw "FTD detection failed on $($failures.Count) case(s)."
+    }
 
-        if ($result.Failed -gt 0) {
-            $numberedFailures = for ($index = 0; $index -lt $result.FailureDetails.Count; $index++) {
-                "[$($index + 1)/$($result.FailureDetails.Count)] $($result.FailureDetails[$index])"
-            }
-            $failureMessage = "$summary$([Environment]::NewLine)$([Environment]::NewLine)" + ($numberedFailures -join "$([Environment]::NewLine)$([Environment]::NewLine)")
-        }
-        elseif ($dotnetExitCode -ne 0) {
-            $failureMessage = "$summary$([Environment]::NewLine)dotnet test exited with code $dotnetExitCode without recording a failed test."
-        }
-        elseif ($result.Total -eq 0) {
-            $failureMessage = 'dotnet test completed without executing any tests.'
-            $dotnetExitCode = 1
-        }
-    }
-    else {
-        $failureMessage = "dotnet test exited with code $dotnetExitCode and did not produce the expected TRX file '$trxPath'."
-        $dotnetExitCode = 1
-    }
+    $passed = $true
+    Add-FtdRunLogLine 'FTD P0 e2e passed.'
 }
 catch {
-    $failureMessage = "FTD unit-test execution failed: $($_.Exception.Message)"
-    $dotnetExitCode = 1
-}
-finally {
-    if (Test-Path -LiteralPath $consoleLogPath -PathType Leaf) {
-        $runLog = [System.IO.File]::ReadAllText($consoleLogPath)
-    }
-    if ($result -and $result.FailureDetails.Count -gt 0) {
-        $runLog += "$([Environment]::NewLine)$([Environment]::NewLine)All failed tests:$([Environment]::NewLine)$([Environment]::NewLine)"
-        $runLog += ($result.FailureDetails -join "$([Environment]::NewLine)$([Environment]::NewLine)")
+    if ($null -eq $failureMessage) {
+        $failureMessage = $_.Exception.Message
     }
 
-    $passed = $dotnetExitCode -eq 0 -and $result -and $result.Failed -eq 0 -and $result.Total -gt 0
+    Add-FtdRunLogLine "FTD P0 e2e failed. $failureMessage"
+}
+finally {
+    $runLog = $runLogBuilder.ToString()
     if ($env:TESTPLATFORM_DISABLE -eq '1') {
         Write-FtdRunLog '[TestPlatform] Cloud reporting disabled (TESTPLATFORM_DISABLE=1).'
     }
@@ -309,8 +287,12 @@ finally {
         $config = Get-TestPlatformConfig
         if ($config) {
             try {
+                if ($null -eq $componentVersion -and $null -ne $deployFolder) {
+                    $componentVersion = Get-DeployedComponentVersion -DeployFolder $deployFolder
+                }
+
                 Send-TestPlatformResult -Config $config -Passed:$passed -Message $failureMessage `
-                    -RunLog $runLog -ComponentVersion (Get-ComponentVersion)
+                    -RunLog $runLog -ComponentVersion $componentVersion
             }
             catch {
                 $hint = if ($_.Exception.Message -match '401') {
@@ -327,9 +309,7 @@ finally {
 }
 
 if ($passed) {
-    Write-Host 'FTD P0 e2e passed.'
     exit 0
 }
 
-Write-Error "FTD P0 e2e failed. $failureMessage"
 exit 1
