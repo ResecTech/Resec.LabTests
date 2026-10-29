@@ -102,9 +102,7 @@ try {
     $script:TestStartedAtUtc = [DateTimeOffset]::UtcNow
     $script:E2eRunLogPath = Start-ScanAgentE2eRunLog -TestId $script:TestId
 
-    if (-not (Test-DirWatcherE2eProcessRunning)) {
-        throw 'DirWatcher process is not running. Start DirWatcher against this Core lab, or pass -DirWatcherExe to restart it during the test.'
-    }
+    Ensure-DirWatcherE2eProcessRunning -DirWatcherExe $DirWatcherExe
 
     $hookUrl = Get-CoreE2eDebugHookUrl -Override $CoreDebugHookUrl
     Write-DwTestStep "Hook: $hookUrl"

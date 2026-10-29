@@ -97,6 +97,51 @@ function Test-DirWatcherE2eProcessRunning {
     return $false
 }
 
+function Set-DirWatcherE2eComponentVersionFromExe {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ExePath
+    )
+
+    try {
+        $ver = (Get-Item -LiteralPath $ExePath).VersionInfo.ProductVersion
+        if (-not [string]::IsNullOrWhiteSpace($ver)) {
+            $env:DIRWATCHER_COMPONENT_VERSION = $ver
+            Write-DwTestStep "DirWatcher version: $ver"
+        }
+    }
+    catch {
+        # optional
+    }
+}
+
+function Ensure-DirWatcherE2eProcessRunning {
+    param(
+        [string] $DirWatcherExe = '',
+        [int] $StartupSettleSec = 5
+    )
+
+    if (Test-DirWatcherE2eProcessRunning) {
+        $runningExe = Get-DirWatcherE2eRunningExePath
+        if (-not [string]::IsNullOrWhiteSpace($runningExe)) {
+            Set-DirWatcherE2eComponentVersionFromExe -ExePath $runningExe
+        }
+        return
+    }
+
+    $dwExe = Resolve-DirWatcherE2eExePath -Override $DirWatcherExe
+    Write-DwTestStep 'DirWatcher is not running; starting it for this test'
+    Start-DirWatcherE2eProcess -ExePath $dwExe
+    if ($StartupSettleSec -gt 0) {
+        Start-Sleep -Seconds $StartupSettleSec
+    }
+    if (-not (Test-DirWatcherE2eProcessRunning)) {
+        throw 'DirWatcher failed to start. Pass -DirWatcherExe or set LAB_DIRWATCHER_EXE to the deployed build.'
+    }
+
+    Set-DirWatcherE2eComponentVersionFromExe -ExePath $dwExe
+}
+
 function Invoke-DirWatcherE2eAgentCommReconnectNudge {
     param(
         [Parameter(Mandatory)]
@@ -202,6 +247,112 @@ function Wait-DirWatcherE2eCleanOutput {
     return $null
 }
 
+function Wait-DirWatcherE2ePathAbsent {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+        [int] $TimeoutSec = 60,
+        [int] $PollMs = 500
+    )
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (-not (Test-Path -LiteralPath $full)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $false
+}
+
+function Wait-DirWatcherE2eCleanOutputDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CleanRoot,
+        [Parameter(Mandatory)]
+        [string] $DirectoryName,
+        [int] $TimeoutSec = 120,
+        [int] $PollMs = 500
+    )
+
+    $cleanFull = [System.IO.Path]::GetFullPath($CleanRoot)
+    $expectedName = [System.IO.Path]::GetFileName($DirectoryName.TrimEnd('\', '/'))
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $cleanFull -PathType Container) {
+            $match = Get-ChildItem -LiteralPath $cleanFull -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq $expectedName } |
+                Select-Object -First 1
+            if ($null -ne $match) {
+                return $match.FullName
+            }
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $null
+}
+
+function Wait-DirWatcherE2ePathPresent {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+        [int] $TimeoutSec = 5,
+        [int] $PollMs = 250
+    )
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $full) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $false
+}
+
+function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
+    <#
+    .SYNOPSIS
+      Waits until an incoming folder is removed by DW periodic cleanup (Delete processed folders after X minutes).
+    .DESCRIPTION
+      Deletion runs on periodic file check (default interval 1 min) after folder creation time exceeds the policy
+      threshold. Allow up to one extra minute beyond the policy value plus one periodic interval.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $IncomingFolderPath,
+        [Parameter(Mandatory)]
+        [datetime] $FolderCreatedAtLocal,
+        [Parameter(Mandatory)]
+        [int] $DeleteAfterMinutes,
+        [int] $ExtraSlackAfterPolicyMinutes = 1,
+        [int] $PeriodicCheckIntervalSec = 60,
+        [int] $PollMs = 500
+    )
+
+    if ($DeleteAfterMinutes -le 0) {
+        throw 'DeleteAfterMinutes must be positive for delete-by-policy wait.'
+    }
+
+    $eligibleAt = $FolderCreatedAtLocal.AddMinutes($DeleteAfterMinutes)
+    $deadline = $eligibleAt.AddMinutes($ExtraSlackAfterPolicyMinutes).AddSeconds($PeriodicCheckIntervalSec)
+    $full = [System.IO.Path]::GetFullPath($IncomingFolderPath)
+
+    while ([datetime]::Now -lt $deadline) {
+        if (-not (Test-Path -LiteralPath $full)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $false
+}
+
 function New-DirWatcherE2eWorkLayout {
     param([string] $WorkRoot = '')
 
@@ -253,7 +404,8 @@ function Wait-DirWatcherE2eMonitoringIncoming {
         [Parameter(Mandatory)]
         [string] $IncomingRoot,
         [int] $TimeoutSec = 60,
-        [int] $PollMs = 500
+        [int] $PollMs = 500,
+        [datetime] $NotBeforeLocal = [datetime]::MinValue
     )
 
     $incomingFull = [System.IO.Path]::GetFullPath($IncomingRoot)
@@ -272,7 +424,21 @@ function Wait-DirWatcherE2eMonitoringIncoming {
             Select-Object -First 1
         if ($null -ne $logFile) {
             $tail = Get-Content -LiteralPath $logFile.FullName -Tail 400 -ErrorAction SilentlyContinue
-            if (@($tail | Where-Object { $_ -like "*$needle*" }).Count -gt 0) {
+            foreach ($line in @($tail)) {
+                if ($line -notlike "*$needle*") {
+                    continue
+                }
+                if ($NotBeforeLocal -ne [datetime]::MinValue) {
+                    if ($line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                        $loggedAt = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
+                        if ($loggedAt -lt $NotBeforeLocal.AddSeconds(-3)) {
+                            continue
+                        }
+                    }
+                    else {
+                        continue
+                    }
+                }
                 Write-DwTestStep "DirWatcher log confirms monitoring: $incomingFull"
                 return $true
             }

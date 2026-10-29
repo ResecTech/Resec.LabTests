@@ -270,7 +270,11 @@ function Send-ScanAgentTestPlatformResult {
     $json = $body | ConvertTo-Json -Depth 6 -Compress
     $response = Invoke-RestMethod -Uri $uri -Method Post -Body $json -ContentType 'application/json; charset=utf-8'
     $resultId = $response.id
-    $versionSuffix = if ($body.componentVersion) { " version=$($body.componentVersion)" } else { '' }
+    $reportedVersion = $null
+    if ($body.Contains('componentVersion')) {
+        $reportedVersion = $body['componentVersion']
+    }
+    $versionSuffix = if (-not [string]::IsNullOrWhiteSpace($reportedVersion)) { " version=$reportedVersion" } else { '' }
     Write-Host "[TestPlatform] Reported result id=$resultId outcome=$($body.outcome) test=$TestName$versionSuffix"
 
     if ($zipBytes -and -not $useInlineEvidence -and $resultId) {

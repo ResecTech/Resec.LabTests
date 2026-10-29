@@ -65,6 +65,9 @@ function Get-ScanAgentTestPlatformReportConfig {
     if ([string]::IsNullOrWhiteSpace($version)) {
         $version = $env:SCANAGENT_COMPONENT_VERSION
     }
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        $version = $env:DIRWATCHER_COMPONENT_VERSION
+    }
 
     return @{
         BaseUrl         = $baseUrl.TrimEnd('/')
@@ -242,7 +245,11 @@ function Send-ScanAgentTestPlatformResult {
     $json = $body | ConvertTo-Json -Depth 6 -Compress
     $response = Invoke-RestMethod -Uri $uri -Method Post -Body $json -ContentType 'application/json; charset=utf-8'
     $resultId = $response.id
-    $versionSuffix = if ($body.componentVersion) { " version=$($body.componentVersion)" } else { '' }
+    $reportedVersion = $null
+    if ($body.Contains('componentVersion')) {
+        $reportedVersion = $body['componentVersion']
+    }
+    $versionSuffix = if (-not [string]::IsNullOrWhiteSpace($reportedVersion)) { " version=$reportedVersion" } else { '' }
     Write-Host "[TestPlatform] Reported result id=$resultId outcome=$($body.outcome) test=$TestName$versionSuffix"
 
     if ($zipBytes -and -not $useInlineEvidence -and $resultId) {
@@ -284,6 +291,13 @@ function Complete-ScanAgentE2eTest {
 
     if (Get-Command -Name 'Ensure-ScanAgentE2eComponentVersionRegistered' -ErrorAction SilentlyContinue) {
         $null = Ensure-ScanAgentE2eComponentVersionRegistered
+        $config = Get-ScanAgentTestPlatformReportConfig
+        if (-not $config) {
+            return
+        }
+    }
+    if (Get-Command -Name 'Ensure-DirWatcherE2eComponentVersionRegistered' -ErrorAction SilentlyContinue) {
+        $null = Ensure-DirWatcherE2eComponentVersionRegistered
         $config = Get-ScanAgentTestPlatformReportConfig
         if (-not $config) {
             return

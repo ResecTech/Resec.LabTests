@@ -23,6 +23,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\Mail\P0\MA-01-NCP7307-ReconnectOutboundDelivery.ps1
    .\FileTypeDetection\P0\FTD-01-E2E.ps1
    .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
+   .\DirWatcher\P0\DW-02-NCP7343-ProcessEmptyFolders.ps1
    ```
 
 ## Layout
@@ -36,7 +37,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Core/` | Core `/debug/hook` E2E and QR fixture generator tool |
 | `Mail/` | Mail Agent E2E and SimpleMailServer config |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
-| `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp on sanitize start) |
+| `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp; NCP-7343 empty folders) |
 
 ## Configuration
 
