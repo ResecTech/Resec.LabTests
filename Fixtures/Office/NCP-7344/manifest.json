@@ -1,0 +1,38 @@
+{
+  "description": "NCP-7344 — Office files with CDR disabled must sanitize without 7-Zip archive extraction errors.",
+  "fixtures": [
+    {
+      "file": "links.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean" ],
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed", "OutcomeBlocked" ],
+      "forbiddenOutcomeDetailsPatterns": [
+        "ExtractFilesWith7ZExe",
+        "not a valid archive",
+        "Cannot open the file as archive",
+        "Can't open as archive"
+      ]
+    },
+    {
+      "file": "simple.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean" ],
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed", "OutcomeBlocked" ],
+      "forbiddenOutcomeDetailsPatterns": [
+        "ExtractFilesWith7ZExe",
+        "not a valid archive",
+        "Cannot open the file as archive",
+        "Can't open as archive"
+      ]
+    },
+    {
+      "file": "simple.xlsx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean" ],
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed", "OutcomeBlocked" ],
+      "forbiddenOutcomeDetailsPatterns": [
+        "ExtractFilesWith7ZExe",
+        "not a valid archive",
+        "Cannot open the file as archive",
+        "Can't open as archive"
+      ]
+    }
+  ]
+}

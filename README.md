@@ -19,6 +19,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    ```powershell
    .\ScanAgent\P0\SA-01-ConnectSourcesDestinationsLoad.ps1
    .\Core\NCP7330-QrImageSanitize.ps1 -PolicyTemplateXml C:\resec\ImportExport\latest.xml
+   .\Core\NCP7344-OfficeNoCdrSanitize.ps1
    .\Mail\P0\MA-01-NCP7307-ReconnectOutboundDelivery.ps1
    .\FileTypeDetection\P0\FTD-01-E2E.ps1
    ```
@@ -56,7 +57,7 @@ Existing per-suite variables (`CORE_E2E_*`, `MAIL_E2E_*`, `MAILAGENT_TEST_FILES_
 
 ## Fixtures
 
-Default root: **`Fixtures\`** (`Allowed`, `Blocked`, `CDR`, `QR\NCP-7330`, `Mail\E2eAttach`). Scan Agent scripts resolve this tree automatically; legacy **`SA-TestFiles`** on `C:\` is still supported.
+Default root: **`Fixtures\`** (`Allowed`, `Blocked`, `CDR`, `QR\NCP-7330`, `Office\NCP-7344`, `Mail\E2eAttach`). Scan Agent scripts resolve this tree automatically; legacy **`SA-TestFiles`** on `C:\` is still supported.
 
 Regenerate Core QR images:
 

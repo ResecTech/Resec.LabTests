@@ -8,6 +8,7 @@ All files passed through Resec products during lab E2E live here. Product script
 | `Blocked/` | Blocked, infected, encrypted, file-type rejection |
 | `CDR/` | Content transformation (SVG, CSV, Office, etc.) |
 | `QR/NCP-7330/` | Core debug-hook image QR regression |
+| `Office/NCP-7344/` | Core debug-hook Office with CDR disabled (NCP-7344) |
 | `Mail/E2eAttach/` | Mail Agent bulk inbound attachments |
 | `FileTypeDetection/` | Deployed FTD lab detection cases (`manifest.json`) |
 

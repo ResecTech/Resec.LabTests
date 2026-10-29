@@ -230,6 +230,80 @@ function Invoke-CoreE2eSanitizeFile {
     return $response
 }
 
+function Get-CoreE2eDebugLogPathEvidence {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl
+    )
+
+    try {
+        $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'logpath'
+        $path = [string]$response.currentLogFilePath
+        if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+            return $path
+        }
+    }
+    catch {
+    }
+
+    return $null
+}
+
+function New-CoreE2eFailureEvidenceZip {
+    param(
+        [Parameter(Mandatory)]
+        [string[]] $Paths,
+        [string] $Label = 'CoreE2e-evidence'
+    )
+
+    $existing = @($Paths | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_)
+        })
+    if (@($existing).Count -eq 0) {
+        return $null
+    }
+
+    $zipPath = Join-Path $env:TEMP ("{0}-{1}.zip" -f $Label, [Guid]::NewGuid().ToString('N'))
+    if (Test-Path -LiteralPath $zipPath) {
+        Remove-Item -LiteralPath $zipPath -Force
+    }
+
+    $staging = Join-Path $env:TEMP ("{0}-stage-{1}" -f $Label, [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    try {
+        foreach ($raw in $existing) {
+            $full = [System.IO.Path]::GetFullPath($raw)
+            if (Test-Path -LiteralPath $full -PathType Leaf) {
+                $destName = [System.IO.Path]::GetFileName($full)
+                $counter = 0
+                while (Test-Path -LiteralPath (Join-Path $staging $destName)) {
+                    $counter++
+                    $destName = '{0}-{1}{2}' -f [System.IO.Path]::GetFileNameWithoutExtension($full), $counter, [System.IO.Path]::GetExtension($full)
+                }
+                Copy-Item -LiteralPath $full -Destination (Join-Path $staging $destName) -Force
+                continue
+            }
+
+            $folderName = [System.IO.Path]::GetFileName($full.TrimEnd('\', '/'))
+            if ([string]::IsNullOrWhiteSpace($folderName)) {
+                $folderName = 'evidence'
+            }
+            Copy-Item -LiteralPath $full -Destination (Join-Path $staging $folderName) -Recurse -Force
+        }
+
+        Compress-Archive -LiteralPath (Join-Path $staging '*') -DestinationPath $zipPath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path -LiteralPath $zipPath) {
+        return $zipPath
+    }
+
+    return $null
+}
+
 function Resolve-CoreE2eFixtureRoot {
     param(
         [string] $Override,

@@ -272,7 +272,8 @@ function Complete-ScanAgentE2eTest {
         [string[]] $EvidencePathsOnFailure = @(),
         [string] $RunLogPath,
         [string] $RunLog,
-        [string] $RunId
+        [string] $RunId,
+        [string] $EvidenceZipPath
     )
 
     $config = Get-ScanAgentTestPlatformReportConfig
@@ -307,7 +308,7 @@ function Complete-ScanAgentE2eTest {
         $logText = Read-ScanAgentRunLogText -RunLogPath $RunLogPath -RunLog $RunLog
         Send-ScanAgentTestPlatformResult -Config $config -TestName $testName -Passed $Passed `
             -FailureMessage $reportMessage -StartedAtUtc $StartedAtUtc -RunId $effectiveRunId `
-            -RunLog $logText -EvidenceZipPath $null
+            -RunLog $logText -EvidenceZipPath $EvidenceZipPath
     }
     catch {
         Write-Warning "Test Platform reporting failed: $($_.Exception.Message)"
@@ -327,7 +328,8 @@ function Invoke-ScanAgentE2eTestPlatformReportingFinally {
         [string] $FailureMessage,
         [DateTimeOffset] $StartedAtUtc,
         [string] $RunLogPath,
-        [string[]] $EvidencePathsOnFailure = @()
+        [string[]] $EvidencePathsOnFailure = @(),
+        [string] $EvidenceZipPath
     )
 
     if (-not (Test-Path -LiteralPath $ReportScriptPath)) {
@@ -345,9 +347,12 @@ function Invoke-ScanAgentE2eTestPlatformReportingFinally {
 
         Complete-ScanAgentE2eTest -TestId $TestId -TestTitle $TestTitle -Passed:$Passed `
             -FailureMessage $FailureMessage -StartedAtUtc $started -EvidencePathsOnFailure $evidence `
-            -RunLogPath $RunLogPath
+            -RunLogPath $RunLogPath -EvidenceZipPath $EvidenceZipPath
     }
     finally {
         Stop-ScanAgentE2eRunLog
+        if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($EvidenceZipPath) -and (Test-Path -LiteralPath $EvidenceZipPath)) {
+            Remove-Item -LiteralPath $EvidenceZipPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }
