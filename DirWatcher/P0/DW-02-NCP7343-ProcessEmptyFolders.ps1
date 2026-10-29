@@ -10,7 +10,7 @@
   Two incoming-folder behaviors are asserted:
     1. Default (Delete processed folders after X minutes = 0): incoming copy remains after clean output.
     2. Delete after X minutes + periodic file check enabled: incoming empty folder is removed by DW
-       periodic cleanup (may occur up to ~1 minute after the policy threshold, plus the periodic interval).
+       periodic cleanup (may occur up to ~1 minute after the policy threshold, plus up to 1 minute test slack).
 
   Lab setup:
     - Core with EnableDebugInterface=True (https://localhost:4504/debug/hook).

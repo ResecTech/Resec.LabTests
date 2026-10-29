@@ -320,8 +320,8 @@ function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
     .SYNOPSIS
       Waits until an incoming folder is removed by DW periodic cleanup (Delete processed folders after X minutes).
     .DESCRIPTION
-      Deletion runs on periodic file check (default interval 1 min) after folder creation time exceeds the policy
-      threshold. Allow up to one extra minute beyond the policy value plus one periodic interval.
+      Deletion runs on periodic file check (default interval 1 min) after the policy age threshold.
+      Waits until policy threshold plus one minute of slack (covers one missed periodic tick).
     #>
     param(
         [Parameter(Mandatory)]
@@ -331,7 +331,6 @@ function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
         [Parameter(Mandatory)]
         [int] $DeleteAfterMinutes,
         [int] $ExtraSlackAfterPolicyMinutes = 1,
-        [int] $PeriodicCheckIntervalSec = 60,
         [int] $PollMs = 500
     )
 
@@ -340,7 +339,7 @@ function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
     }
 
     $eligibleAt = $FolderCreatedAtLocal.AddMinutes($DeleteAfterMinutes)
-    $deadline = $eligibleAt.AddMinutes($ExtraSlackAfterPolicyMinutes).AddSeconds($PeriodicCheckIntervalSec)
+    $deadline = $eligibleAt.AddMinutes($ExtraSlackAfterPolicyMinutes)
     $full = [System.IO.Path]::GetFullPath($IncomingFolderPath)
 
     while ([datetime]::Now -lt $deadline) {
@@ -350,7 +349,8 @@ function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
         Start-Sleep -Milliseconds $PollMs
     }
 
-    return $false
+    # Folder may be removed on the same second as the deadline (periodic tick alignment).
+    return -not (Test-Path -LiteralPath $full)
 }
 
 function New-DirWatcherE2eWorkLayout {

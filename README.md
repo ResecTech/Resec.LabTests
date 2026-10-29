@@ -24,6 +24,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\FileTypeDetection\P0\FTD-01-E2E.ps1
    .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
    .\DirWatcher\P0\DW-02-NCP7343-ProcessEmptyFolders.ps1
+   .\DirWatcher\P0\DW-03-NCP7345-DeleteProcessedFolderWithFile.ps1
    ```
 
 ## Layout
