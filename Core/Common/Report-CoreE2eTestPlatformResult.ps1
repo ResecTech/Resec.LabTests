@@ -18,6 +18,7 @@
 
 .NOTES
   On failure, -EvidencePathsOnFailure lists related file names in the result message (no zip upload).
+  On success, run transcript and evidence zip are not attached to the Test Platform result.
 #>
 Set-StrictMode -Version Latest
 
@@ -305,10 +306,16 @@ function Complete-ScanAgentE2eTest {
                 -EvidencePathsOnFailure $EvidencePathsOnFailure
         }
 
-        $logText = Read-ScanAgentRunLogText -RunLogPath $RunLogPath -RunLog $RunLog
+        $logText = $null
+        $evidenceZip = $null
+        if (-not $Passed) {
+            $logText = Read-ScanAgentRunLogText -RunLogPath $RunLogPath -RunLog $RunLog
+            $evidenceZip = $EvidenceZipPath
+        }
+
         Send-ScanAgentTestPlatformResult -Config $config -TestName $testName -Passed $Passed `
             -FailureMessage $reportMessage -StartedAtUtc $StartedAtUtc -RunId $effectiveRunId `
-            -RunLog $logText -EvidenceZipPath $EvidenceZipPath
+            -RunLog $logText -EvidenceZipPath $evidenceZip
     }
     catch {
         Write-Warning "Test Platform reporting failed: $($_.Exception.Message)"
@@ -353,6 +360,9 @@ function Invoke-ScanAgentE2eTestPlatformReportingFinally {
         Stop-ScanAgentE2eRunLog
         if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($EvidenceZipPath) -and (Test-Path -LiteralPath $EvidenceZipPath)) {
             Remove-Item -LiteralPath $EvidenceZipPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($Passed -and -not [string]::IsNullOrWhiteSpace($RunLogPath) -and (Test-Path -LiteralPath $RunLogPath)) {
+            Remove-Item -LiteralPath $RunLogPath -Force -ErrorAction SilentlyContinue
         }
     }
 }

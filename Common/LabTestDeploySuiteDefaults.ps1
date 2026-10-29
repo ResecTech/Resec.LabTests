@@ -70,3 +70,12 @@ function Get-FileTypeDetectionDeployRequirements {
         }
     )
 }
+
+function Get-DirWatcherDeployRequirements {
+    return @(
+        [PSCustomObject]@{
+            DeployScriptId  = 'DirWatcher'
+            RequiresRunning = $false
+        }
+    )
+}

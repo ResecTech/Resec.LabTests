@@ -288,10 +288,20 @@ function New-CoreE2eFailureEvidenceZip {
             if ([string]::IsNullOrWhiteSpace($folderName)) {
                 $folderName = 'evidence'
             }
-            Copy-Item -LiteralPath $full -Destination (Join-Path $staging $folderName) -Recurse -Force
+            $destFolder = Join-Path $staging $folderName
+            New-Item -ItemType Directory -Path $destFolder -Force | Out-Null
+            & robocopy.exe $full $destFolder /E /R:0 /W:0 /XF .ResecLock.loc /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+            if ($LASTEXITCODE -ge 8) {
+                throw "robocopy failed copying evidence folder '$full' (exit $LASTEXITCODE)."
+            }
         }
 
-        Compress-Archive -LiteralPath (Join-Path $staging '*') -DestinationPath $zipPath -Force
+        $archiveItems = @(Get-ChildItem -LiteralPath $staging -Force -ErrorAction SilentlyContinue)
+        if ($archiveItems.Count -eq 0) {
+            return $null
+        }
+
+        Compress-Archive -Path ($archiveItems | ForEach-Object { $_.FullName }) -DestinationPath $zipPath -Force
     }
     finally {
         Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue

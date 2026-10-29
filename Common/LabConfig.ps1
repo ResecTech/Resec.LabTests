@@ -56,11 +56,11 @@ Or set LAB_TESTS_CONFIG to your config file path.
 function Get-LabProductRepoRoot {
     <#
     .PARAMETER Product
-      ScanAgent | Core | Mail | FileTypeDetection
+      ScanAgent | Core | Mail | FileTypeDetection | DirWatcher
     #>
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('ScanAgent', 'Core', 'Mail', 'FileTypeDetection')]
+        [ValidateSet('ScanAgent', 'Core', 'Mail', 'FileTypeDetection', 'DirWatcher')]
         [string] $Product
     )
 
@@ -69,6 +69,7 @@ function Get-LabProductRepoRoot {
         Core              = 'LAB_CORE_REPO_ROOT'
         Mail              = 'LAB_MAIL_REPO_ROOT'
         FileTypeDetection = 'LAB_FTD_REPO_ROOT'
+        DirWatcher        = 'LAB_DIRWATCHER_REPO_ROOT'
     }
 
     $envName = $envMap[$Product]

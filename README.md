@@ -22,6 +22,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\Core\NCP7344-OfficeNoCdrSanitize.ps1
    .\Mail\P0\MA-01-NCP7307-ReconnectOutboundDelivery.ps1
    .\FileTypeDetection\P0\FTD-01-E2E.ps1
+   .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
    ```
 
 ## Layout
@@ -35,6 +36,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Core/` | Core `/debug/hook` E2E and QR fixture generator tool |
 | `Mail/` | Mail Agent E2E and SimpleMailServer config |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
+| `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp on sanitize start) |
 
 ## Configuration
 
@@ -51,7 +53,9 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `LAB_CORE_REPO_ROOT` | Core git root |
 | `LAB_MAIL_REPO_ROOT` | Mail Agent git root |
 | `LAB_FTD_REPO_ROOT` | FileTypeDetection git root |
+| `LAB_DIRWATCHER_REPO_ROOT` | DirWatcher git root |
 | `LAB_SCANAGENT_DEBUG_EXE` | Full path to `ScanAgentDebug.exe` |
+| `LAB_DIRWATCHER_EXE` | Full path to `DirWatcher.exe` |
 
 Existing per-suite variables (`CORE_E2E_*`, `MAIL_E2E_*`, `MAILAGENT_TEST_FILES_ROOT`, `SCANAGENT_TEST_FILES_ROOT`, Test Platform `TESTPLATFORM_*`) still work.
 

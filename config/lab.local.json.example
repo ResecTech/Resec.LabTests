@@ -11,11 +11,15 @@
     },
     "FileTypeDetection": {
       "repoRoot": "C:\\Work\\ResecTech\\Resec.FileTypeDetection"
+    },
+    "DirWatcher": {
+      "repoRoot": "C:\\Work\\ResecTech\\Resec.Agent.DirWatcher"
     }
   },
   "optional": {
     "fixturesRoot": "",
     "scanAgentDebugExe": "",
+    "dirWatcherExe": "",
     "corePolicyTemplateXml": "",
     "testPlatformBaseUrl": "",
     "testPlatformFunctionKey": ""

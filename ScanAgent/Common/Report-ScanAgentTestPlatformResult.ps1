@@ -18,6 +18,7 @@
 
 .NOTES
   On failure, -EvidencePathsOnFailure lists related file names in the result message (no zip upload).
+  On success, run transcript is not attached to the Test Platform result.
 #>
 Set-StrictMode -Version Latest
 
@@ -332,7 +333,11 @@ function Complete-ScanAgentE2eTest {
                 -EvidencePathsOnFailure $EvidencePathsOnFailure
         }
 
-        $logText = Read-ScanAgentRunLogText -RunLogPath $RunLogPath -RunLog $RunLog
+        $logText = $null
+        if (-not $Passed) {
+            $logText = Read-ScanAgentRunLogText -RunLogPath $RunLogPath -RunLog $RunLog
+        }
+
         Send-ScanAgentTestPlatformResult -Config $config -TestName $testName -Passed $Passed `
             -FailureMessage $reportMessage -StartedAtUtc $StartedAtUtc -RunId $effectiveRunId `
             -RunLog $logText -EvidenceZipPath $null
@@ -377,5 +382,8 @@ function Invoke-ScanAgentE2eTestPlatformReportingFinally {
     }
     finally {
         Stop-ScanAgentE2eRunLog
+        if ($Passed -and -not [string]::IsNullOrWhiteSpace($RunLogPath) -and (Test-Path -LiteralPath $RunLogPath)) {
+            Remove-Item -LiteralPath $RunLogPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }
