@@ -1,0 +1,21 @@
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="----=_NCP7353ScriptLab"
+Content-Location: file:///C:/ncp7353/script-stripping-lab.mht
+
+------=_NCP7353ScriptLab
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: binary
+Content-Location: file:///C:/ncp7353/page.html
+
+<html><head><title>NCP7353 script stripping lab</title></head><body>
+<script type="text/javascript">window.__ncp7353LabInline=1;</script>
+<script>alert('NCP7353-lab-script');</script>
+<p id="ncp7353-marker">NCP7353-SCRIPT-LAB-CONTENT-KEPT</p>
+</body></html>
+------=_NCP7353ScriptLab
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: binary
+Content-Location: file:///C:/ncp7353/readme.txt
+
+Related part; HTML CDR should not remove this marker text from the HTML body check.
+------=_NCP7353ScriptLab--

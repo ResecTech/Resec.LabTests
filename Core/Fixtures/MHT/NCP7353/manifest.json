@@ -7,6 +7,16 @@
       "requiredTextInOutput": ["Hello MHTML lab"]
     },
     {
+      "file": "script-stripping-lab.mht",
+      "label": "script-stripping",
+      "sourceNote": "Synthetic .mht: inline scripts removed by Html CDR; body marker kept",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "requiredTextInOutput": ["NCP7353-SCRIPT-LAB-CONTENT-KEPT", "script stripping lab"],
+      "requireScriptsRemoved": true,
+      "minInputScriptTags": 2,
+      "maxOutputScriptTags": 0
+    },
+    {
       "file": "hikaku-biz-euc-jp.mhtml",
       "label": "hikaku-biz-euc-jp",
       "sourceNote": "EUC-JP 比較ビズ (Desktop Test\\MHT\\EUC-JP)",

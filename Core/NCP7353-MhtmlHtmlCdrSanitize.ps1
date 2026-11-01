@@ -4,7 +4,7 @@
   NCP-7353: MHTML with Html/Email CDR — debug sanitize and verify MHTML byte-patch path.
 
 .DESCRIPTION
-  Default: all fixtures in Core\Fixtures\MHT\NCP7353\manifest.json (UTF-8 smoke, EUC-JP 比較ビズ, ORICON).
+  Default: all fixtures in Core\Fixtures\MHT\NCP7353\manifest.json (script stripping, UTF-8 smoke, EUC-JP, ORICON).
   Pass -InputFile for a single file (legacy).
 #>
 [CmdletBinding()]
@@ -151,6 +151,51 @@ function Get-Ncp7353FixtureStringList {
     return @($FixtureSpec.$PropertyName)
 }
 
+function Get-Ncp7353FixtureOptionalBool {
+    param(
+        $FixtureSpec,
+        [Parameter(Mandatory)]
+        [string] $PropertyName,
+        [bool] $Default = $false
+    )
+
+    if ($null -eq $FixtureSpec -or -not ($FixtureSpec.PSObject.Properties.Name -contains $PropertyName)) {
+        return $Default
+    }
+
+    return [bool]$FixtureSpec.$PropertyName
+}
+
+function Get-Ncp7353FixtureOptionalInt {
+    param(
+        $FixtureSpec,
+        [Parameter(Mandatory)]
+        [string] $PropertyName,
+        [int] $Default = 0
+    )
+
+    if ($null -eq $FixtureSpec -or -not ($FixtureSpec.PSObject.Properties.Name -contains $PropertyName)) {
+        return $Default
+    }
+
+    return [int]$FixtureSpec.$PropertyName
+}
+
+function Get-MhtmlHtmlScriptOpenTagCount {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return 0
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $text = [System.Text.Encoding]::Latin1.GetString($bytes)
+    return [regex]::Matches($text, '<script\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Count
+}
+
 function Assert-Ncp7353MhtmlFixtureOutput {
     param(
         [Parameter(Mandatory)]
@@ -225,6 +270,23 @@ function Assert-Ncp7353MhtmlFixtureOutput {
             $listed = ($anyList | ForEach-Object { [string]$_ }) -join ', '
             throw "Output for '$label' missing any required marker (checked: $listed)."
         }
+    }
+
+    if (Get-Ncp7353FixtureOptionalBool -FixtureSpec $FixtureSpec -PropertyName 'requireScriptsRemoved') {
+        $minInput = Get-Ncp7353FixtureOptionalInt -FixtureSpec $FixtureSpec -PropertyName 'minInputScriptTags' -Default 1
+        $maxOutput = Get-Ncp7353FixtureOptionalInt -FixtureSpec $FixtureSpec -PropertyName 'maxOutputScriptTags' -Default 0
+        $inputScripts = Get-MhtmlHtmlScriptOpenTagCount -Path $InputPath
+        $outputScripts = Get-MhtmlHtmlScriptOpenTagCount -Path $OutputPath
+
+        if ($inputScripts -lt $minInput) {
+            throw "Input for '$label' expected at least $minInput '<script' tags, found $inputScripts."
+        }
+
+        if ($outputScripts -gt $maxOutput) {
+            throw "Output for '$label' expected at most $maxOutput '<script' tags after Html CDR, found $outputScripts."
+        }
+
+        Write-TestStep "Scripts '$label': input=$inputScripts output=$outputScripts (max allowed $maxOutput)"
     }
 
     Write-TestStep "OK '$label' -> outcome=$outcome outputMD5=$outputHash"
