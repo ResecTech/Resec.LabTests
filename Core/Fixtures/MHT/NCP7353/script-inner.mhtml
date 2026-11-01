@@ -1,0 +1,18 @@
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="----=_NCP7353Test"
+Content-Location: file:///C:/ncp7353/test.mhtml
+
+------=_NCP7353Test
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/ncp7353/page.html
+
+<html><head><title>NCP7353</title></head><body><script>alert(1);</script><p>Hello MHTML lab</p></body></html>
+
+------=_NCP7353Test
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-Location: file:///C:/ncp7353/dot.png
+
+iVBORw0KGgo=
+------=_NCP7353Test--

@@ -75,16 +75,18 @@ if ($parseErrors -and $parseErrors.Count -gt 0) {
     exit 0
 }
 
-$funcAst = @($ast.FindAll({
+$funcAsts = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Get-LabTestDeployRequirements'
-    }, $true))[0]
+    }, $true))
 
-if ($null -eq $funcAst) {
+if ($funcAsts.Count -eq 0) {
     Write-Output '[]'
     exit 0
 }
+
+$funcAst = $funcAsts[0]
 
 $testDir = [System.IO.Path]::GetDirectoryName($resolvedPath)
 $escapedDir = $testDir.Replace("'", "''")

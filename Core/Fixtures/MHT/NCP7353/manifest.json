@@ -1,0 +1,25 @@
+{
+  "fixtures": [
+    {
+      "file": "script-inner.mhtml",
+      "label": "utf8-smoke",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "requiredTextInOutput": ["Hello MHTML lab"]
+    },
+    {
+      "file": "hikaku-biz-euc-jp.mhtml",
+      "label": "hikaku-biz-euc-jp",
+      "sourceNote": "EUC-JP 比較ビズ (Desktop Test\\MHT\\EUC-JP)",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "requiredTextInOutput": ["biz.ne.jp", "EUC-JP"],
+      "requiredTextInOutputAny": ["比較", "=E6=AF=94=E8=BC=83", "比較ビズ"]
+    },
+    {
+      "file": "oricon-news.mhtml",
+      "label": "oricon-news",
+      "sourceNote": "ORICON NEWS (Desktop Test\\MHT)",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "requiredTextInOutputAny": ["ORICON", "oricon"]
+    }
+  ]
+}
