@@ -153,6 +153,64 @@ function Pop-CoreE2ePolicyState {
     return $pop
 }
 
+function Push-CoreE2eSystemPropertiesState {
+    param([Parameter(Mandatory)][string] $HookUrl)
+
+    $push = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'pushsystempropertystate'
+    Assert-CoreE2eDebugHookResponse -Response $push -Step 'pushsystempropertystate'
+    return $push
+}
+
+function Pop-CoreE2eSystemPropertiesState {
+    param([Parameter(Mandatory)][string] $HookUrl)
+
+    $pop = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'popsystempropertystate'
+    Assert-CoreE2eDebugHookResponse -Response $pop -Step 'popsystempropertystate'
+    return $pop
+}
+
+function Import-CoreE2eSystemProperties {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [array] $SystemProperties
+    )
+
+    $entries = @()
+    foreach ($prop in @($SystemProperties)) {
+        if ($null -eq $prop) { continue }
+        $entries += @{
+            name      = [string]$prop.name
+            propValue = [string]$prop.propValue
+        }
+    }
+
+    $import = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'importsystemproperties' -BodyObject @{
+        systemProperties = $entries
+    }
+    Assert-CoreE2eDebugHookResponse -Response $import -Step 'importsystemproperties'
+    return $import
+}
+
+function Set-CoreE2eLabAlertEmailSmtpSystemProperties {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $SmtpServer = '127.0.0.1',
+        [int] $SmtpPort = 2525,
+        [string] $SenderAccount = 'core-lab-sender@127.0.0.1',
+        [string] $SenderPassword = ''
+    )
+
+    return Import-CoreE2eSystemProperties -HookUrl $HookUrl -SystemProperties @(
+        @{ name = 'AlertEmailSmtpServer'; propValue = $SmtpServer }
+        @{ name = 'AlertEmailSmtpPort'; propValue = [string]$SmtpPort }
+        @{ name = 'AlertEmailAccount'; propValue = $SenderAccount }
+        @{ name = 'AlertEmailAccountPassword'; propValue = $SenderPassword }
+    )
+}
+
 function Import-CoreE2ePolicies {
     param(
         [Parameter(Mandatory)]

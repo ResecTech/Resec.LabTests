@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>AnyCPU;x64</Platforms>
+    <AssemblyName>SimpleMailServer</AssemblyName>
+    <ApplicationIcon>smtp-server.ico</ApplicationIcon>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- WinForms needs real cultures (e.g. he-IL / 1037) for WM_INPUTLANGCHANGE; invariant mode crashes the UI. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Rider / VS: use Publish (not Build). Default profile → bin\publish\single-file\ -->
+    <PublishProfile>FolderProfile</PublishProfile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+  </ItemGroup>
+
+  <!-- Rider "Publish to Folder" often passes framework-dependent flags; re-apply before publish. -->
+  <Target Name="EnforceSingleFilePublish" BeforeTargets="PrepareForPublish">
+    <PropertyGroup>
+      <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+      <SelfContained>true</SelfContained>
+      <PublishSingleFile>true</PublishSingleFile>
+      <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+      <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+      <IncludeSymbolsInSingleFile>false</IncludeSymbolsInSingleFile>
+      <PublishTrimmed Condition="'$(PublishTrimmed)' == ''">true</PublishTrimmed>
+      <TrimMode Condition="'$(TrimMode)' == ''">partial</TrimMode>
+      <InvariantGlobalization>false</InvariantGlobalization>
+      <PublishDir Condition="'$(PublishProfile)' == 'FolderProfile' or '$(PublishProfile)' == ''">$(MSBuildProjectDirectory)\bin\publish\single-file\</PublishDir>
+    </PropertyGroup>
+    <Message Importance="high" Text="SimpleMailServer: single-file publish → $(PublishDir) (SelfContained=$(SelfContained), PublishSingleFile=$(PublishSingleFile))" />
+  </Target>
+
+</Project>

@@ -14,7 +14,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    notepad .\config\lab.local.json
    ```
 3. Set `products.*.repoRoot` to the git roots of Scan Agent, Core, Mail, and/or FileTypeDetection.
-4. Build product bits (Scan Agent DebugClient, Mail E2E tools, etc.) in those repos.
+4. Build product bits (Scan Agent DebugClient, LabTests `Tools\SimpleMailServer`, Mail `SendBulkAttachmentMail`, etc.) in those repos.
 5. Run a test, for example:
    ```powershell
    .\ScanAgent\P0\SA-01-ConnectSourcesDestinationsLoad.ps1
@@ -36,7 +36,8 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Common/` | `LabConfig.ps1`, `LabFixtures.ps1`, deploy fixture helpers (`LabTestDeploySuiteDefaults.ps1`) |
 | `ScanAgent/` | Scan Agent UI E2E scripts and `Common/` helpers |
 | `Core/` | Core `/debug/hook` E2E and QR fixture generator tool |
-| `Mail/` | Mail Agent E2E and SimpleMailServer config |
+| `Mail/` | Mail Agent E2E scripts and headless SMTP config (`Mail/Config`) |
+| `Tools/SimpleMailServer/` | Lab SMTP capture utility (`--cli`) for Mail and Core E2E |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
 | `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp; NCP-7343 empty folders) |
 

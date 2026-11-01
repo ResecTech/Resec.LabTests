@@ -28,7 +28,7 @@ E2E scripts bootstrap **Windows PowerShell 5.1** by dot-sourcing `MailAgentE2eBo
 
 ## E2E utility paths
 
-E2E scripts resolve each tool in order: explicit script parameter → environment variable → repo `bin` / publish outputs → `PATH`.
+E2E scripts resolve each tool in order: explicit script parameter → environment variable → LabTests `Tools\SimpleMailServer` or Mail repo build outputs (legacy) → `PATH`.
 
 To discover built tools on the current machine and set the session variables:
 
@@ -42,7 +42,7 @@ Use `-Force` to replace variables that are already set. Implementation: `MailAge
 
 1. Core running with `AppSettings:EnableDebugInterface` = `True`.
 2. Mail agent running with root `EnableDebugInterface` = `true` (debug hook on **127.0.0.1:4505**); registered as relay **mail**; policy next hop → SimpleMailServer port (default **26**).
-3. Build **SimpleMailServer** and **SendBulkAttachmentMail** (or use publish single-file outputs).
+3. Build **SimpleMailServer** (`Resec.LabTests\Tools\SimpleMailServer`) and **SendBulkAttachmentMail** (Mail repo), or use publish single-file outputs.
 4. MA-01 starts (or verifies) **SimpleMailServer.exe --cli** on the capture port (default **127.0.0.1:26**), then runs **two** scenarios: short commdown hold (default **10s**, `MA-01-Short`) and long hold (default **30s**, `MA-01-Long`). Use `-Scenarios Short|Long|All` to filter; tune holds via `-ShortCommDownHoldSeconds` / `-LongCommDownHoldSeconds`.
 
 ## Core debug

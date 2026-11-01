@@ -13,15 +13,17 @@
     - Optional -MailTempFolder / MAIL_E2E_TEMP_FOLDER; otherwise resolved from mail agent debug status (tempFolderRoot).
 
   Required fixtures and tools (local repo):
-    Build once from repo root:
+    Build SimpleMailServer (Resec.LabTests):
+      dotnet build Tools\SimpleMailServer\SimpleMailServer.csproj -c Debug
+    Build SendBulkAttachmentMail (Resec.Agent.Mail):
       dotnet build src\Resec.Agent.Mail.sln -c Debug -p:Platform=x64
-    Or publish single-file (Rider/VS Publish on SimpleMailServer and SendBulkAttachmentMail).
+    Or publish single-file (Rider/VS Publish).
 
     | Artifact | Purpose |
     | --- | --- |
-    | SimpleMailServer\bin\x64\Debug\net10.0-windows7.0\win-x64\SimpleMailServer.exe (or bin\publish\single-file\) | Outbound capture SMTP (--cli); started by this script unless -SkipStartSimpleMailServer |
-    | SendBulkAttachmentMail\bin\Debug\net10.0-windows7.0\win-x64\SendBulkAttachmentMail.exe (or publish single-file) | Inbound bulk send to mail agent SMTP |
-    | src\Test\Config\simple-mail-server.appsettings.json | Headless SimpleMailServer config for MA-01 |
+    | Resec.LabTests\Tools\SimpleMailServer\bin\x64\Debug\...\SimpleMailServer.exe (or bin\publish\single-file\) | Outbound capture SMTP (--cli); started by this script unless -SkipStartSimpleMailServer |
+    | SendBulkAttachmentMail\bin\Debug\...\SendBulkAttachmentMail.exe (or publish single-file) | Inbound bulk send to mail agent SMTP |
+    | Mail\Config\simple-mail-server.appsettings.json | Headless SimpleMailServer config for MA-01 |
     | Fixtures\Mail\E2eAttach\ | Attachments for bulk send (e.g. clean-sample.txt, minimal-inbound.eml) |
 
     Tool paths (first match wins): -SimpleMailServerPath / -SendBulkAttachmentMailPath, then
@@ -74,12 +76,15 @@ $script:MaE2eCommonRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common'
 
 function Write-Ma01RequiredFixturesHelp {
     $testTreeRoot = Get-LabMailTestTreeRoot
+    $labTestsRoot = Get-LabTestsRootForMailE2eTools
     $repoRoot = Get-LabProductRepoRoot -Product Mail
     $sln = Join-Path (Get-LabMailProductRoot) 'Resec.Agent.Mail.sln'
 
     Write-Host ''
     Write-Host '=== MA-01 required fixtures and tools ==='
-    Write-Host 'Build E2E utilities (from repo root):'
+    Write-Host 'Build SimpleMailServer (Resec.LabTests):'
+    Write-Host "  dotnet build $(Join-Path $labTestsRoot 'Tools\SimpleMailServer\SimpleMailServer.csproj') -c Debug"
+    Write-Host 'Build SendBulkAttachmentMail (Resec.Agent.Mail):'
     Write-Host "  dotnet build `"$sln`" -c Debug -p:Platform=x64"
     Write-Host ''
     Write-Host 'Set tool paths (session):'
@@ -87,7 +92,7 @@ function Write-Ma01RequiredFixturesHelp {
     Write-Host ''
     Write-Host 'Or set MAIL_E2E_SIMPLE_MAIL_SERVER_EXE / MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE, or pass -SimpleMailServerPath / -SendBulkAttachmentMailPath.'
     Write-Host 'Typical build outputs:'
-    Write-Host "  $(Join-Path $repoRoot 'SimpleMailServer\bin\x64\Debug\net10.0-windows7.0\win-x64\SimpleMailServer.exe')"
+    Write-Host "  $(Join-Path $labTestsRoot 'Tools\SimpleMailServer\bin\x64\Debug\net10.0-windows7.0\win-x64\SimpleMailServer.exe')"
     Write-Host "  $(Join-Path $repoRoot 'SendBulkAttachmentMail\bin\Debug\net10.0-windows7.0\win-x64\SendBulkAttachmentMail.exe')"
     Write-Host ''
     Write-Host 'Repo fixtures (or set MAILAGENT_TEST_FILES_ROOT):'

@@ -18,6 +18,31 @@ function Get-MailAgentE2eRepoRoot {
     return Get-LabProductRepoRoot -Product Mail
 }
 
+function Get-LabTestsRootForMailE2eTools {
+    if (-not (Get-Command Get-LabTestsRoot -ErrorAction SilentlyContinue)) {
+        $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        . (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
+    }
+
+    return Get-LabTestsRoot
+}
+
+function Get-SimpleMailServerToolDirectories {
+    param([Parameter(Mandatory)][string] $CallingScriptRoot)
+
+    $dirs = New-Object System.Collections.Generic.List[string]
+    $dirs.Add((Join-Path (Get-LabTestsRootForMailE2eTools) 'Tools\SimpleMailServer'))
+
+    try {
+        $legacyMailRoot = Get-MailAgentE2eRepoRoot -CallingScriptRoot $CallingScriptRoot
+        $dirs.Add((Join-Path $legacyMailRoot 'SimpleMailServer'))
+    }
+    catch {
+    }
+
+    return $dirs
+}
+
 function Get-MailAgentE2eToolPathCandidates {
     param(
         [Parameter(Mandatory)]
@@ -34,13 +59,25 @@ function Get-MailAgentE2eToolPathCandidates {
         $candidates.Add($ExplicitPath.Trim())
     }
 
-    $repoRoot = Get-MailAgentE2eRepoRoot -CallingScriptRoot $CallingScriptRoot
-    $toolDir = Join-Path $repoRoot $ToolName
+    $toolDirectories = New-Object System.Collections.Generic.List[string]
+    if ($ToolName -eq 'SimpleMailServer') {
+        foreach ($dir in @(Get-SimpleMailServerToolDirectories -CallingScriptRoot $CallingScriptRoot)) {
+            if (-not [string]::IsNullOrWhiteSpace($dir)) {
+                $toolDirectories.Add($dir)
+            }
+        }
+    }
+    else {
+        $repoRoot = Get-MailAgentE2eRepoRoot -CallingScriptRoot $CallingScriptRoot
+        $toolDirectories.Add((Join-Path $repoRoot $ToolName))
+    }
 
-    foreach ($configuration in @('Debug', 'Release')) {
-        $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
-        $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
-        $candidates.Add((Join-Path $toolDir "bin\publish\single-file\$ExecutableFileName"))
+    foreach ($toolDir in $toolDirectories) {
+        foreach ($configuration in @('Debug', 'Release')) {
+            $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
+            $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
+            $candidates.Add((Join-Path $toolDir "bin\publish\single-file\$ExecutableFileName"))
+        }
     }
 
     try {
@@ -198,7 +235,14 @@ function Resolve-MailAgentE2eToolPath {
         $envHint = " Set $EnvironmentVariableName, or run Mail\Common\Initialize-MailAgentE2eToolPaths.ps1 from Resec.LabTests."
     }
 
-    throw "$ExecutableFileName not found. Build $ToolName (Debug|Release), pass an explicit -Path parameter, or locate tools via environment.$envHint"
+    $buildHint = if ($ToolName -eq 'SimpleMailServer') {
+        'Resec.LabTests\Tools\SimpleMailServer'
+    }
+    else {
+        "Resec.Agent.Mail\$ToolName"
+    }
+
+    throw "$ExecutableFileName not found. Build $buildHint (Debug|Release), pass an explicit -Path parameter, or locate tools via environment.$envHint"
 }
 
 function Resolve-SimpleMailServerPath {
