@@ -232,17 +232,37 @@ function Assert-Ncp7353MhtmlFixtureOutput {
 
     $inputHash = (Get-FileHash -LiteralPath $InputPath -Algorithm MD5).Hash
     $outputHash = (Get-FileHash -LiteralPath $OutputPath -Algorithm MD5).Hash
-    if ($outputHash -eq $inputHash) {
-        throw "Output byte-identical to input for '$label' after HTML CDR; expected MHTML patch path."
+    $allowIdentical = Get-Ncp7353FixtureOptionalBool -FixtureSpec $FixtureSpec -PropertyName 'allowOutputIdenticalToInput' -Default $false
+    if (-not $allowIdentical -and $outputHash -eq $inputHash) {
+        throw "Output byte-identical to input for '$label'; expected sanitized repack."
     }
 
-    $patchedLog = $false
+    $expectHtmlPatchLog = Get-Ncp7353FixtureOptionalBool -FixtureSpec $FixtureSpec -PropertyName 'expectHtmlPatchLog' -Default $true
+    $expectEmbeddedPatchLog = Get-Ncp7353FixtureOptionalBool -FixtureSpec $FixtureSpec -PropertyName 'expectEmbeddedPartPatchLog' -Default $false
+
+    $patchedHtmlLog = $false
+    $patchedEmbeddedLog = $false
     if ($CoreLogPath -and (Test-Path -LiteralPath $CoreLogPath)) {
-        $patchedLog = [bool](Select-String -LiteralPath $CoreLogPath -Pattern 'MHTML: patching sanitized HTML' -Quiet)
+        $patchedHtmlLog = [bool](Select-String -LiteralPath $CoreLogPath -Pattern 'MHTML: patching sanitized HTML' -Quiet)
+        $patchedEmbeddedLog = [bool](Select-String -LiteralPath $CoreLogPath -Pattern 'MHTML: patching sanitized embedded MIME parts' -Quiet)
     }
 
-    if (-not $patchedLog) {
+    if ($expectHtmlPatchLog -and -not $patchedHtmlLog) {
         throw "Expected Core log line 'MHTML: patching sanitized HTML' for '$label'."
+    }
+
+    if ($expectEmbeddedPatchLog -and -not $patchedEmbeddedLog -and ($allowIdentical -or $outputHash -eq $inputHash)) {
+        throw "Expected embedded MIME repack for '$label' (Core log 'MHTML: patching sanitized embedded MIME parts' and/or output bytes changed)."
+    }
+
+    foreach ($absent in (Get-Ncp7353FixtureStringList -FixtureSpec $FixtureSpec -PropertyName 'requiredAbsentInOutput')) {
+        if ([string]::IsNullOrWhiteSpace([string]$absent)) {
+            continue
+        }
+
+        if (Test-MhtmlOutputContainsText -Path $OutputPath -Text ([string]$absent)) {
+            throw "Output for '$label' still contains disallowed marker '$absent'."
+        }
     }
 
     foreach ($required in (Get-Ncp7353FixtureStringList -FixtureSpec $FixtureSpec -PropertyName 'requiredTextInOutput')) {
@@ -407,11 +427,22 @@ try {
         }
     }
 
-    Write-Host "Scenario passed: $($fixtureSpecs.Count) MHTML fixture(s), HTML CDR + byte patch."
+    Write-Host "Scenario passed: $($fixtureSpecs.Count) MHTML fixture(s), HTML/embedded MIME byte patch."
     exit 0
 }
 catch {
-    Write-Error "Scenario failed: $($_.Exception.Message)"
+    if ($_.Exception.Message -match 'actively refused|No connection could be made') {
+        Write-Error @"
+Scenario failed: Core debug hook is not reachable.
+Start Core in DEBUG (HTTPS port 4504) and re-run:
+  cd $($PSScriptRoot)
+  .\NCP7353-MhtmlHtmlCdrSanitize.ps1 -OutputRoot D:\out
+Original error: $($_.Exception.Message)
+"@
+    }
+    else {
+        Write-Error "Scenario failed: $($_.Exception.Message)"
+    }
     exit 1
 }
 finally {

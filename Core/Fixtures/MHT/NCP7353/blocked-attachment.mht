@@ -1,0 +1,15 @@
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_NCP7353Blocked"
+
+------=_NCP7353Blocked
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body>NCP7353-BLOCKED-ATTACH-FIXTURE</body></html>
+------=_NCP7353Blocked
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="NCP7353-blocked.html"
+
+PGh0bWw+PGJvZHk+PHNjcmlwdD4vLyBQQVlMT0FEOiBOQ1A3MzUzLUZBS0UtRVhFLVBBWUxPQUQgPC9zY3JpcHQ+PC9ib2R5PjwvaHRtbD4=
+------=_NCP7353Blocked--

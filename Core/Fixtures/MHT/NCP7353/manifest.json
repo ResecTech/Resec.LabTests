@@ -3,14 +3,14 @@
     {
       "file": "script-inner.mhtml",
       "label": "utf8-smoke",
-      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeContentRemoved"],
       "requiredTextInOutput": ["Hello MHTML lab"]
     },
     {
       "file": "script-stripping-lab.mht",
       "label": "script-stripping",
       "sourceNote": "Synthetic .mht: inline scripts removed by Html CDR; body marker kept",
-      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeContentRemoved"],
       "requiredTextInOutput": ["NCP7353-SCRIPT-LAB-CONTENT-KEPT", "script stripping lab"],
       "requireScriptsRemoved": true,
       "minInputScriptTags": 2,
@@ -20,7 +20,7 @@
       "file": "hikaku-biz-euc-jp.mhtml",
       "label": "hikaku-biz-euc-jp",
       "sourceNote": "EUC-JP 比較ビズ (Desktop Test\\MHT\\EUC-JP)",
-      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeContentRemoved"],
       "requiredTextInOutput": ["biz.ne.jp", "EUC-JP"],
       "requiredTextInOutputAny": ["比較", "=E6=AF=94=E8=BC=83", "比較ビズ"]
     },
@@ -28,8 +28,28 @@
       "file": "oricon-news.mhtml",
       "label": "oricon-news",
       "sourceNote": "ORICON NEWS (Desktop Test\\MHT)",
-      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed"],
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeContentRemoved"],
       "requiredTextInOutputAny": ["ORICON", "oricon"]
+    },
+    {
+      "file": "png-embedded.mht",
+      "label": "png-embedded-repack",
+      "sourceNote": "Embedded PNG extracts and sanitizes; inner MHTML preserved when image CDR is non-intrusive (byte-identical OK). blocked-attachment covers embedded-part byte patch.",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeContentRemoved"],
+      "requiredTextInOutput": ["NCP7353-PNG-FIXTURE-KEEP"],
+      "expectHtmlPatchLog": false,
+      "expectEmbeddedPartPatchLog": false,
+      "allowOutputIdenticalToInput": true
+    },
+    {
+      "file": "blocked-attachment.mht",
+      "label": "blocked-attachment-repack",
+      "sourceNote": "HTML attachment with inline script stripped by Html CDR; sanitized bytes repacked into MHT part",
+      "forbiddenOutcomes": ["OutcomeBlockedTransformationFailed", "OutcomeBlocked", "OutcomeContentRemoved"],
+      "requiredTextInOutput": ["NCP7353-BLOCKED-ATTACH-FIXTURE"],
+      "expectHtmlPatchLog": false,
+      "expectEmbeddedPartPatchLog": true,
+      "requiredAbsentInOutput": ["NCP7353-FAKE-EXE-PAYLOAD"]
     }
   ]
 }
