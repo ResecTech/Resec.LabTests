@@ -17,6 +17,7 @@ $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
 $commonRoot = Join-Path (Split-Path $CallingScriptRoot -Parent) 'Common'
 foreach ($name in @(
+        'DirWatcherE2eAgentDebug.ps1',
         'DirWatcherE2ePs51.ps1',
         'DirWatcherE2eCorePolicy.ps1',
         'Report-DirWatcherTestPlatformResult.ps1'

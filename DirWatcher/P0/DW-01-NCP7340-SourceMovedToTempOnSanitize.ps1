@@ -49,6 +49,7 @@ param(
     [string] $DirWatcherExe = '',
     [switch] $SkipPolicyImport,
     [switch] $SkipDirWatcherRestart,
+    [switch] $LeaveDirWatcherRunning,
     [switch] $UseAgentCommNudge,
     [int] $SourceClearedTimeoutSec = 10,
     [int] $CleanOutputTimeoutSec = 60,
@@ -131,6 +132,10 @@ try {
         Push-CoreE2ePolicyState -HookUrl $hookUrl | Out-Null
         $script:PolicyStackPushed = $true
 
+        if (-not $SkipDirWatcherRestart) {
+            Stop-DirWatcherE2eProcesses
+        }
+
         Write-DwTestStep 'importpolicies (NCP-7340 DirWatcher lab policy)'
         Import-DwNcp7340LabPolicy -HookUrl $hookUrl `
             -IncomingRoot $layout.Incoming -TempRoot $layout.Temp `
@@ -138,7 +143,6 @@ try {
 
         if (-not $SkipDirWatcherRestart) {
             $dwExe = Resolve-DirWatcherE2eExePath -Override $DirWatcherExe
-            Stop-DirWatcherE2eProcesses
             Start-DirWatcherE2eProcess -ExePath $dwExe
             if (-not (Test-DirWatcherE2eProcessRunning)) {
                 throw 'DirWatcher failed to start after restart.'
@@ -228,6 +232,18 @@ finally {
                 Write-DwTestStep "Core log for evidence: $coreLog"
             }
         }
+        $evidenceList = [System.Collections.Generic.List[string]]::new()
+        foreach ($p in @($evidenceOnFailure)) {
+            if (-not [string]::IsNullOrWhiteSpace($p)) {
+                $evidenceList.Add($p) | Out-Null
+            }
+        }
+        Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
+        $dwLogDir = Get-DirWatcherE2eLogDirectory
+        if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
+            $evidenceList.Add($dwLogDir) | Out-Null
+        }
+        $evidenceOnFailure = @($evidenceList)
         if (@($evidenceOnFailure).Count -gt 0) {
             try {
                 $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label 'DW-NCP7340'
@@ -263,6 +279,13 @@ finally {
         catch {
             Write-Warning "poppolicystate failed: $($_.Exception.Message)"
         }
+    }
+
+    try {
+        Stop-DirWatcherE2eProcessesForScenarioTeardown -LeaveRunning:$LeaveDirWatcherRunning
+    }
+    catch {
+        Write-Warning "DirWatcher teardown failed: $($_.Exception.Message)"
     }
 
     if ($script:ScenarioPassed -and $layout -and $layout.WorkRoot -and (Test-Path -LiteralPath $layout.WorkRoot)) {

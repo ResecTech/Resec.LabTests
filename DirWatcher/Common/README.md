@@ -7,8 +7,8 @@ PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `
 | # | Requirement |
 |---|-------------|
 | 1 | Core running with `EnableDebugInterface=True` (port 4504). |
-| 2 | DirWatcher installed, registered to Core (process may be started by the test if not already running). |
-| 3 | `config\lab.local.json` (optional `DirWatcher.repoRoot` for docs only). |
+| 2 | DirWatcher installed, registered to Core. E2E starts DW with `DIRWATCHER_ENABLE_DEBUG_INTERFACE=true` (HTTP debug on **4506**); no appsettings change required. |
+| 3 | `config\lab.local.json` (optional `DirWatcher.repoRoot`, `dirWatcherDebugBaseUrl`). |
 | 4 | Set `LAB_DIRWATCHER_EXE` if DirWatcher is not under Program Files. |
 
 ## Tests
@@ -30,4 +30,6 @@ For **version skew** regression (e.g. DW 26.2 + Core 26.1), deploy the trains un
 
 ## Policy
 
-Tests import a lab policy via Core `importpolicies` (see `Common\DirWatcherE2eCorePolicy.ps1`), assign it to `dir_watcher`, restart DirWatcher (default), and wait for `Monitoring folder:` in `C:\Resec\Logs\Directory Watcher` before dropping the fixture. Optional `-UseAgentCommNudge` runs Core `agentcommblockon/off` instead of relying on restart alone.
+Tests import a lab policy via Core `importpolicies` (see `Common\DirWatcherE2eCorePolicy.ps1`), assign it to `dir_watcher`, restart DirWatcher (default), and wait for monitoring via DirWatcher **`connection.state`** on `/debug/hook` (fallback: `Monitoring folder:` in `C:\Resec\Logs\Directory Watcher`). Helpers: `Common\DirWatcherE2eAgentDebug.ps1`. Optional `-UseAgentCommNudge` runs Core `agentcommblockon/off` instead of relying on restart alone.
+
+When a scenario **starts or restarts** DirWatcher (headless, no console), **`finally` teardown stops that process** so orphaned `DirWatcher.exe` instances do not linger. If DirWatcher was **already running** before the script began, teardown leaves it alone. Use **`-LeaveDirWatcherRunning`** to keep a scenario-started instance running for manual follow-up.

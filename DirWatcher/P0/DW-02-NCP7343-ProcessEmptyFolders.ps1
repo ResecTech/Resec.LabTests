@@ -35,6 +35,7 @@ param(
     [string] $DirWatcherExe = '',
     [switch] $SkipPolicyImport,
     [switch] $SkipDirWatcherRestart,
+    [switch] $LeaveDirWatcherRunning,
     [switch] $UseAgentCommNudge,
     [int] $CleanOutputTimeoutSec = 10,
     [int] $IncomingRetainVerifySec = 5,
@@ -91,6 +92,10 @@ function Import-DwNcp7343PolicyAndApply {
         $script:PolicyStackPushed = $true
     }
 
+    if (-not $SkipDirWatcherRestart) {
+        Stop-DirWatcherE2eProcesses
+    }
+
     Import-DwNcp7343LabPolicy -HookUrl $HookUrl `
         -IncomingRoot $Layout.Incoming -TempRoot $Layout.Temp `
         -RejectedRoot $Layout.Rejected -CleanRoot $Layout.Clean `
@@ -100,7 +105,6 @@ function Import-DwNcp7343PolicyAndApply {
     if (-not $SkipDirWatcherRestart) {
         $dwExe = Resolve-DirWatcherE2eExePath -Override $DirWatcherExe
         $monitorNotBefore = Get-Date
-        Stop-DirWatcherE2eProcesses
         Start-DirWatcherE2eProcess -ExePath $dwExe
         if (-not (Test-DirWatcherE2eProcessRunning)) {
             throw 'DirWatcher failed to start after restart.'
@@ -258,10 +262,18 @@ finally {
                 Write-DwTestStep "Core log for evidence: $coreLog"
             }
         }
-        $dwLogDir = Get-DirWatcherE2eLogDirectory
-        if ($dwLogDir) {
-            $evidenceOnFailure += $dwLogDir
+        $evidenceList = [System.Collections.Generic.List[string]]::new()
+        foreach ($p in @($evidenceOnFailure)) {
+            if (-not [string]::IsNullOrWhiteSpace($p)) {
+                $evidenceList.Add($p) | Out-Null
+            }
         }
+        Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
+        $dwLogDir = Get-DirWatcherE2eLogDirectory
+        if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
+            $evidenceList.Add($dwLogDir) | Out-Null
+        }
+        $evidenceOnFailure = @($evidenceList)
         if (@($evidenceOnFailure).Count -gt 0) {
             try {
                 $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label 'DW-NCP7343'
@@ -297,6 +309,13 @@ finally {
         catch {
             Write-Warning "poppolicystate failed: $($_.Exception.Message)"
         }
+    }
+
+    try {
+        Stop-DirWatcherE2eProcessesForScenarioTeardown -LeaveRunning:$LeaveDirWatcherRunning
+    }
+    catch {
+        Write-Warning "DirWatcher teardown failed: $($_.Exception.Message)"
     }
 
     if ($script:ScenarioPassed -and $layout -and $layout.WorkRoot -and (Test-Path -LiteralPath $layout.WorkRoot)) {
