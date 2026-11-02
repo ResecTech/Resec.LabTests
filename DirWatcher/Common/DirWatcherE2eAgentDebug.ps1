@@ -326,11 +326,14 @@ function Get-DirWatcherE2eDebugLogPathEvidence {
 
 function Add-DirWatcherE2eDebugEvidencePaths {
     param(
-        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[string]] $EvidencePaths,
         [string] $BaseUrl = ''
     )
 
+    if ($null -eq $EvidencePaths) {
+        return
+    }
     foreach ($p in Get-DirWatcherE2eDebugLogPathEvidence -BaseUrl $BaseUrl) {
         if ([string]::IsNullOrWhiteSpace($p)) {
             continue
