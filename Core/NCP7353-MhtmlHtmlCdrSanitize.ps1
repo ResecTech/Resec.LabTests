@@ -309,7 +309,7 @@ function Assert-Ncp7353MhtmlFixtureOutput {
         Write-TestStep "Scripts '$label': input=$inputScripts output=$outputScripts (max allowed $maxOutput)"
     }
 
-    Write-TestStep "OK '$label' -> outcome=$outcome outputMD5=$outputHash"
+    Write-TestStep "OK '$label' -> outcome=$outcome output=$OutputPath outputMD5=$outputHash"
 }
 
 $hookUrl = $null
@@ -363,7 +363,9 @@ try {
         Write-TestStep "Fixture root: $fixtureRoot"
     }
 
-    Wait-CoreE2eReady -HookUrl $hookUrl | Out-Null
+    Write-TestStep 'Waiting for Core startup (ready)...'
+    Wait-CoreE2eReady -HookUrl $hookUrl -LogMarkStep 'NCP7353-MhtmlHtmlCdrSanitize' | Out-Null
+    Write-TestStep 'Core ready (coreInitialized=true)'
 
     $resolvedPolicyId = $PolicyId
     if (-not $SkipPolicyImport) {
@@ -398,9 +400,11 @@ try {
         }
 
         $outName = [System.IO.Path]::GetFileName($inputPath)
-        $outputPath = Join-Path $outputRoot ('7353-' + ([string]$spec.label) + '-' + $outName)
+        $outputPath = [System.IO.Path]::GetFullPath((Join-Path $outputRoot ('7353-' + ([string]$spec.label) + '-' + $outName)))
 
         Write-TestStep "sanitize: $inputPath"
+        Write-TestStep "output: $outputPath"
+        Write-CoreE2eDebugLogMark -HookUrl $hookUrl -Step ([string]$spec.label) -Mark "before sanitize $outName"
         $sanitizeParams = @{
             HookUrl        = $hookUrl
             FilePath       = $inputPath
@@ -414,6 +418,15 @@ try {
 
         $result = Invoke-CoreE2eSanitizeFile @sanitizeParams
         Write-TestStep "outcome=$($result.outcome) details=$($result.outcomeDetails) elapsedMs=$($result.elapsedMs)"
+        if ($result.outputPath -and (Test-Path -LiteralPath $result.outputPath -PathType Leaf)) {
+            $note = [string]$result.outputPathNote
+            if ([string]::IsNullOrWhiteSpace($note)) {
+                Write-TestStep "Output written: $($result.outputPath)"
+            }
+            else {
+                Write-TestStep "Output written: $($result.outputPath) ($note)"
+            }
+        }
 
         Assert-Ncp7353MhtmlFixtureOutput -FixtureSpec $spec -InputPath $inputPath -OutputPath $outputPath -Result $result -CoreLogPath $coreLog
     }

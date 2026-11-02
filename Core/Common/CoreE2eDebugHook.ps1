@@ -83,12 +83,16 @@ function Invoke-CoreE2eDebugHook {
         [Parameter(Mandatory)]
         [string] $Command,
         [hashtable] $BodyObject,
+        [string] $Message,
         [int] $TimeoutSec = 300
     )
 
     if ($BodyObject) {
         $payload = $BodyObject.Clone()
         $payload['command'] = $Command
+        if (-not [string]::IsNullOrWhiteSpace($Message)) {
+            $payload['message'] = $Message
+        }
         $json = $payload | ConvertTo-Json -Depth 80 -Compress
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
         return Invoke-CoreE2eRestMethod -Uri $HookUrl -Method Post -Body $bytes `
@@ -96,8 +100,32 @@ function Invoke-CoreE2eDebugHook {
     }
 
     $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
-    $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
+    $queryParts = @('command=' + [uri]::EscapeDataString($Command))
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $queryParts += 'message=' + [uri]::EscapeDataString($Message)
+    }
+
+    $uri = '{0}{1}{2}' -f $HookUrl, $separator, ($queryParts -join '&')
     return Invoke-CoreE2eRestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+}
+
+function Write-CoreE2eDebugLogMark {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Mark,
+        [string] $Step,
+        [switch] $PassThru
+    )
+
+    $text = if ([string]::IsNullOrWhiteSpace($Step)) { $Mark } else { "$Step | $Mark" }
+    $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'logmark' -Message $text
+    Assert-CoreE2eDebugHookResponse -Response $response -Step "logmark ($text)"
+
+    if ($PassThru) {
+        return $response
+    }
 }
 
 function Assert-CoreE2eDebugHookResponse {
@@ -121,16 +149,39 @@ function Wait-CoreE2eReady {
     param(
         [Parameter(Mandatory)]
         [string] $HookUrl,
-        [int] $TimeoutSec = 300
+        [int] $TimeoutSec = 300,
+        [string] $LogMarkStep
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $hookReachableMarked = $false
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
-        $r = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'ready'
-        Assert-CoreE2eDebugHookResponse -Response $r -Step 'ready'
-        if ($r.coreInitialized -eq $true) {
-            return $r
+        try {
+            $r = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'ready'
+            Assert-CoreE2eDebugHookResponse -Response $r -Step 'ready'
+
+            if (-not $hookReachableMarked -and -not [string]::IsNullOrWhiteSpace($LogMarkStep)) {
+                Write-CoreE2eDebugLogMark -HookUrl $HookUrl -Step $LogMarkStep `
+                    -Mark 'debug hook reachable, waiting for coreInitialized'
+                $hookReachableMarked = $true
+            }
+
+            if ($r.coreInitialized -eq $true) {
+                if (-not [string]::IsNullOrWhiteSpace($LogMarkStep)) {
+                    Write-CoreE2eDebugLogMark -HookUrl $HookUrl -Step $LogMarkStep `
+                        -Mark 'core startup complete (coreInitialized=true)'
+                }
+
+                return $r
+            }
         }
+        catch {
+            $msg = $_.Exception.Message
+            if ($msg -notmatch 'actively refused|No connection could be made|Unable to connect|connection attempt failed') {
+                throw
+            }
+        }
+
         Start-Sleep -Seconds 1
     }
 
