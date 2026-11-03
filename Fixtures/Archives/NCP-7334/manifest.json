@@ -1,0 +1,18 @@
+{
+  "description": "NCP-7334 — RPM must extract via bsdtar and sanitize without 7-Zip invalid-archive errors.",
+  "fixtures": [
+    {
+      "file": "resec-rpm-test-1.0-1.noarch.rpm",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean" ],
+      "forbiddenOutcomes": [ "OutcomeBlockedTransformationFailed", "OutcomeFailGlobalInternalError" ],
+      "forbiddenOutcomeDetailsPatterns": [
+        "ExtractRpmWithBsdtar",
+        "RPM extraction requires bsdtar",
+        "ExtractFilesWith7ZExe",
+        "not a valid archive",
+        "Cannot open the file as archive",
+        "Can't open as archive"
+      ]
+    }
+  ]
+}
