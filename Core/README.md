@@ -41,3 +41,12 @@ cd <Resec.LabTests>\Core
 Uses **`pushsystempropertystate`** / **`importsystemproperties`** / **`popsystempropertystate`** to point Core alert SMTP at **127.0.0.1** (default port **2525**, env `CORE_E2E_SMTP_PORT`). Starts **SimpleMailServer.exe --cli** from **`Tools\SimpleMailServer`** to capture the job notification (env `MAIL_E2E_SIMPLE_MAIL_SERVER_EXE` or `-SimpleMailServerPath`). If you already run a local SMTP listener, use **`-SkipStartSmtpCapture`**.
 
 Policy: `Policies\NCP7352-email-notification-blocked.importpolicies.json` (unknown file types blocked + Email Notification facet with distinct HTML markers). Runs **two** sanitizations: unknown bytes → blocked email template; `Fixtures\FileTypeDetection\sample.txt` (or generated `.txt`) → success template. Use `-SkipSuccessScenario` for blocked-only. Requires Core with the NCP-7352 JobReporter fix and debug system-property commands.
+
+## NCP-7360 — Password Portal status after encrypted archive block
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7360-PortalBlockedArchiveStatus.ps1
+```
+
+Policy: `Policies\NCP7360-portal-encrypted-archive-block.importpolicies.json` (block archive on disallowed embedded files, sanitization report for encrypted/blocked, unknown types blocked). Enables **Portal_Enabled** via `importsystemproperties` (uses existing **Portal_Secret** for `/v1/portal` `apiToken`, or sets a lab fallback when empty). Builds an AES-encrypted zip at runtime (password **1111**, see `Fixtures\Blocked\Encrypted\NCP-7360\manifest.json`), runs debug **sanitize**, submits the password through **`/v1/portal/submit-file-data`**, and asserts **`/v1/portal/file-data`** is **Blocked**, not **Passed** — reproduces [NCP-7360](https://resec.atlassian.net/browse/NCP-7360) until Core/portal outcome bubbling is fixed.

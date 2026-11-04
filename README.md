@@ -40,6 +40,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Tools/SimpleMailServer/` | Lab SMTP capture utility (`--cli`) for Mail and Core E2E |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
 | `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp; NCP-7343 empty folders) |
+| `docs/` | Authoring guide for new E2E scripts — [E2E-Test-Authoring.md](docs/E2E-Test-Authoring.md) |
 
 ## Configuration
 

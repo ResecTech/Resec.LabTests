@@ -1,0 +1,4 @@
+{
+  "fixturePassword": "1111",
+  "notes": "Main script builds NCP7360-encrypted-unknown.zip at runtime (AES zip containing inner-unknown.dat blocked as Unknown File)."
+}
