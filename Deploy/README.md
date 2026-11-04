@@ -11,6 +11,8 @@ Deploy/
   ScanAgent.ps1
   Core.ps1
   Mail.ps1
+  RestApi.ps1
+  DirWatcher.ps1
   FileTypeDetection.ps1
 ```
 
@@ -48,6 +50,8 @@ param(
 ### Deploy state
 
 After a successful deploy, scripts write **`{TargetFolder}\.lab-deploy.json`** (product, branch, version, `deployedUtc`). Shared helpers live in **`_DeployState.ps1`** (not listed as a deploy script).
+
+When a product executable is found under **TargetFolder** or **SourceFolder**, deploy scripts also set user env vars (for example **`RESEC_CORE_EXE_LOCATION`**) via **`Common\LabDeployExeLocation.ps1`**. Lab Test Runner parses **`RESEC_LAB_DEPLOY_EXE_ENV=…`** from deploy stdout and applies those variables to the runner process and subsequent E2E runs (no shell restart required).
 
 - **`is_deployed`**: exit **0** if state matches and payload files exist (placeholder scripts may be state-only); exit **1** if not deployed. Writes one JSON object to **stdout**: `{ "componentName", "requiresRunning": false, "state": { "deployed", "running" } }` (`running` reflects whether the component process is up).
 - **`un_deploy`**: remove installed files and delete the state file.

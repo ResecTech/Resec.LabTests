@@ -92,7 +92,9 @@ function Test-LabDeployPlaceholderScriptId {
     $id = $DeployScriptId.Trim()
     return [string]::Equals($id, 'ScanAgent', [System.StringComparison]::OrdinalIgnoreCase) -or
         [string]::Equals($id, 'Mail', [System.StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($id, 'Core', [System.StringComparison]::OrdinalIgnoreCase)
+        [string]::Equals($id, 'Core', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($id, 'DirWatcher', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($id, 'RestApi', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Test-LabDeployIsBuildDeployed {

@@ -14,8 +14,10 @@ function Get-LabDeployScriptProcessName {
     switch ($ComponentName.Trim()) {
         'ScanAgent' { return 'Resec.Agent.ScanAgent' }
         'Mail' { return 'Resec.Agent.Mail' }
-        'Core' { return 'Resec.Core.Server' }
+        'Core' { return 'Resec.Core' }
         'FileTypeDetection' { return 'Resec.FileTypeDetection' }
+        'DirWatcher' { return 'DirWatcher' }
+        'RestApi' { return 'Resec.Agent.RestAPI' }
         default { return $null }
     }
 }
@@ -51,6 +53,13 @@ function Get-LabDeployFolderMatchTokens {
     }
     elseif ([string]::Equals($id, 'FileTypeDetection', [System.StringComparison]::OrdinalIgnoreCase)) {
         $null = $tokens.Add('FTD')
+    }
+    elseif ([string]::Equals($id, 'DirWatcher', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $null = $tokens.Add('Agent.DirWatcher')
+    }
+    elseif ([string]::Equals($id, 'RestApi', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $null = $tokens.Add('Agent.RestAPI')
+        $null = $tokens.Add('Agent.RestApi')
     }
 
     return @($tokens.ToArray())

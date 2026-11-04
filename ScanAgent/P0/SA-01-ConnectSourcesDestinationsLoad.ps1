@@ -30,7 +30,7 @@
 [CmdletBinding()]
 param(
     [string] $ScanAgentDebug = '',
-    [string] $ScanAgentExe = 'C:\Program Files\Resec Technologies\Resec Scan Agent\Resec.Agent.ScanAgent.exe',
+    [string] $ScanAgentExe = '',
     [switch] $SkipAgentRestart,
     [switch] $SkipSanitization,
     [string] $SourceFolder = '',

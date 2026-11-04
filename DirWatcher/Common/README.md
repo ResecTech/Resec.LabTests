@@ -9,7 +9,7 @@ PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `
 | 1 | Core running with `EnableDebugInterface=True` (port 4504). |
 | 2 | DirWatcher installed, registered to Core. E2E starts DW with `DIRWATCHER_ENABLE_DEBUG_INTERFACE=true` (HTTP debug on **4506**); no appsettings change required. |
 | 3 | `config\lab.local.json` (optional `DirWatcher.repoRoot`, `dirWatcherDebugBaseUrl`). |
-| 4 | Build DirWatcher locally (sets user **`RESEC_DW_EXE_LOCATION`** and **`LAB_DIRWATCHER_EXE`**), or set one of those env vars / `lab.local.json` `dirWatcherExe` if not under Program Files. Restart Lab Test Runner or open a new shell after the first build so User env is visible. |
+| 4 | Build DirWatcher locally (sets user **`RESEC_DW_EXE_LOCATION`** and **`LAB_DIRWATCHER_EXE`**), deploy from Lab Test Runner, or set one of those env vars / `lab.local.json` `dirWatcherExe` if not under Program Files. Restart Lab Test Runner or open a new shell after the first **local build** so User env is visible; **Deploy** updates the runner without restart. |
 
 ## Tests
 

@@ -15,10 +15,12 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '_DeployState.ps1')
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Common\LabTestDeployFixtures.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Common\LabDeployExeLocation.ps1')
 
 $product = if ([string]::IsNullOrWhiteSpace($ProductName)) { 'Core' } else { $ProductName.Trim() }
 $deployScriptId = 'Core'
 $targetPath = [System.IO.Path]::GetFullPath($TargetFolder)
+$sourcePath = [System.IO.Path]::GetFullPath($SourceFolder)
 
 switch ($Action) {
     'is_deployed' {
@@ -40,10 +42,10 @@ switch ($Action) {
 
     default {
         Write-Host "Deploy placeholder for $product ($BranchName / $VersionName)"
-        Write-Host "SourceFolder: $SourceFolder"
-        Write-Host "TargetFolder: $TargetFolder"
-        Write-Host "version variable: $version"
+        Write-Host "SourceFolder: $sourcePath"
+        Write-Host "TargetFolder: $targetPath"
         Set-LabDeployState -TargetFolder $targetPath -ProductName $product -BranchName $BranchName -VersionName $VersionName
+        Update-ResecLabDeployExeLocationUserEnv -DeployScriptId $deployScriptId -SearchRoots @($targetPath, $sourcePath) | Out-Null
         exit 0
     }
 }

@@ -15,13 +15,37 @@ param(
 
 $script:SaE2eCallingScriptRoot = $CallingScriptRoot
 $script:SaE2eScanAgentDebug = $ScanAgentDebug
-$script:SaE2eScanAgentExe = $ScanAgentExe
-if ([string]::IsNullOrWhiteSpace($script:SaE2eScanAgentExe)) {
-    $script:SaE2eScanAgentExe = 'C:\Program Files\Resec Technologies\Resec Scan Agent\Resec.Agent.ScanAgent.exe'
+
+$labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+. (Join-Path $labTestsRoot 'Common\LabDeployExeLocation.ps1')
+
+function Get-ScanAgentE2eInstalledAgentExeDefaultPath {
+    return 'C:\Program Files\Resec Technologies\Resec Scan Agent\Resec.Agent.ScanAgent.exe'
 }
 
+function Resolve-ScanAgentE2eAgentExePath {
+    param([string] $Override = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($Override)) {
+        return [System.IO.Path]::GetFullPath($Override.Trim())
+    }
+
+    $fromEnv = Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
+        'RESEC_SCANAGENT_EXE_LOCATION',
+        'LAB_SCANAGENT_EXE',
+        'SCANAGENT_EXE'
+    )
+    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+        return $fromEnv
+    }
+
+    return Get-ScanAgentE2eInstalledAgentExeDefaultPath
+}
+
+$script:SaE2eScanAgentExe = Resolve-ScanAgentE2eAgentExePath -Override $ScanAgentExe
+
 # Bump when shared Scan Agent E2E Common behavior changes (Core policy import, bootstrap, debug helpers).
-$script:ScanAgentE2eLabBundleVersion = '2026.10.28.4'
+$script:ScanAgentE2eLabBundleVersion = '2026.11.04.1'
 
 function Get-ScanAgentE2eLabBundleGitRevision {
     param(

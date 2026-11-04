@@ -4,6 +4,15 @@ Set-StrictMode -Version Latest
 $script:MailAgentE2eSimpleMailServerEnvVar = 'MAIL_E2E_SIMPLE_MAIL_SERVER_EXE'
 $script:MailAgentE2eSendBulkAttachmentMailEnvVar = 'MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE'
 
+. (Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1')
+
+function Get-MailAgentE2eExePathFromEnvironment {
+    return Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
+        'RESEC_MAIL_AGENT_EXE_LOCATION',
+        'LAB_MAIL_AGENT_EXE'
+    )
+}
+
 function Get-MailAgentE2eRepoRoot {
     param(
         [Parameter(Mandatory)]

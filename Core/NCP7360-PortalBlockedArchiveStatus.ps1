@@ -17,7 +17,7 @@
   Prerequisites:
     - Core DEBUG with EnableDebugInterface and portal REST on the management port (default https://localhost:4504).
     - At least one deployment row in the DB (register any agent once, or pass -DeploymentId).
-    - 7-Zip on the lab host (env CORE_E2E_7Z_EXE, or Core build EmbeddedWindows\7z.exe).
+    - 7-Zip on the lab host (env CORE_E2E_7Z_EXE, RESEC_CORE_EXE_LOCATION build output, or Core repo EmbeddedWindows\7z.exe).
 
 .EXAMPLE
   .\NCP7360-PortalBlockedArchiveStatus.ps1
@@ -60,6 +60,7 @@ $script:CoreE2eReportScript = Join-Path $commonRoot 'Report-CoreE2eTestPlatformR
 . (Join-Path $commonRoot 'CoreE2eDebugHook.ps1')
 . (Join-Path $commonRoot 'CoreE2ePortalApi.ps1')
 . (Join-Path $commonRoot 'CoreE2eNcp7360Policy.ps1')
+. (Join-Path $commonRoot 'CoreE2eLabPaths.ps1')
 
 $script:OutcomePassedValue = 100
 $script:SanitizationStatePassed = 10
@@ -95,24 +96,12 @@ function Resolve-Ncp7360SevenZipExe {
         return $full
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($env:CORE_E2E_7Z_EXE)) {
-        $full = [System.IO.Path]::GetFullPath($env:CORE_E2E_7Z_EXE.Trim())
-        if (Test-Path -LiteralPath $full -PathType Leaf) {
-            return $full
-        }
+    $resolved = Resolve-CoreE2eEmbedded7ZipPath
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+        return $resolved
     }
 
-    try {
-        $coreRoot = Get-LabProductRepoRoot -Product Core
-        $fromCore = Join-Path $coreRoot 'src\Resec.Core.Server\bin\26.2\Debug\EmbeddedWindows\7z.exe'
-        if (Test-Path -LiteralPath $fromCore -PathType Leaf) {
-            return [System.IO.Path]::GetFullPath($fromCore)
-        }
-    }
-    catch {
-    }
-
-    throw '7-Zip not found. Set CORE_E2E_7Z_EXE or build Core (EmbeddedWindows\7z.exe).'
+    throw '7-Zip not found. Set CORE_E2E_7Z_EXE, build Core (sets RESEC_CORE_EXE_LOCATION), or set LAB_CORE_EXE.'
 }
 
 function New-Ncp7360EncryptedUnknownArchive {

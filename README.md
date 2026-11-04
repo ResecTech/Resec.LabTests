@@ -63,6 +63,14 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `LAB_SCANAGENT_DEBUG_EXE` | Full path to `ScanAgentDebug.exe` |
 | `LAB_DIRWATCHER_EXE` | Full path to `DirWatcher.exe` (also set automatically when you build DirWatcher) |
 | `RESEC_DW_EXE_LOCATION` | Same as `LAB_DIRWATCHER_EXE`; canonical name set by DirWatcher **post-build** (User env) |
+| `RESEC_CORE_EXE_LOCATION` | Full path to `Resec.Core.exe` (Core **post-build** or lab **Deploy → Core**) |
+| `LAB_CORE_EXE` | Legacy alias for `RESEC_CORE_EXE_LOCATION` |
+| `RESEC_SCANAGENT_EXE_LOCATION` | Full path to `Resec.Agent.ScanAgent.exe` (Scan Agent **post-build** or **Deploy → ScanAgent**) |
+| `LAB_SCANAGENT_EXE` | Legacy alias for `RESEC_SCANAGENT_EXE_LOCATION` |
+| `RESEC_MAIL_AGENT_EXE_LOCATION` | Full path to `Resec.Agent.Mail.exe` (Mail **post-build** or **Deploy → Mail**) |
+| `LAB_MAIL_AGENT_EXE` | Legacy alias for `RESEC_MAIL_AGENT_EXE_LOCATION` |
+| `RESEC_RESTAPI_EXE_LOCATION` | Full path to `Resec.Agent.RestAPI.exe` (REST API **post-build** or **Deploy → RestApi**) |
+| `LAB_RESTAPI_EXE` | Legacy alias for `RESEC_RESTAPI_EXE_LOCATION` |
 
 Existing per-suite variables (`CORE_E2E_*`, `MAIL_E2E_*`, `MAILAGENT_TEST_FILES_ROOT`, `SCANAGENT_TEST_FILES_ROOT`, Test Platform `TESTPLATFORM_*`) still work.
 

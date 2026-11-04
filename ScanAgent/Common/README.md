@@ -6,6 +6,7 @@ E2E scripts bootstrap **Windows PowerShell 5.1** by dot-sourcing `ScanAgentE2eBo
 
 - `Get-CollectionCount` / `Get-SanitizationFileEntries` — safe scalar vs array handling (JSON and pipelines).
 - `Resolve-ScanAgentDebugPath` — `Resec.LabTests\ScanAgent\ScanAgentDebug.exe` (optional copy), Scan Agent repo `bin\Debug\...`, and DebugClient outputs. Override via `lab.local.json` `optional.scanAgentDebugExe` or `LAB_SCANAGENT_DEBUG_EXE`.
+- Agent exe: **`RESEC_SCANAGENT_EXE_LOCATION`** / **`LAB_SCANAGENT_EXE`** (set by Scan Agent **post-build** or **Deploy → ScanAgent**); legacy **`SCANAGENT_EXE`** is also updated on post-build.
 - `ScanAgentE2eBootstrap.ps1` — loads Common helpers; prints **bundle version** (`$script:ScanAgentE2eLabBundleVersion`, currently `2026.10.28.2`) + git short SHA at startup. **Bump that string** when changing shared E2E behavior so lab machines can confirm they pulled latest scripts.
 - `ScanAgentE2eEmbeddedPolicyBase.ps1` — default **embedded** Scan Agent `policyRawData` base (no WebMC XML). Override with `-PolicyBaseRaw`, `SCANAGENT_SA05_POLICY_BASE_RAW`, or legacy `-PolicyTemplateXml` / `SCANAGENT_SA05_POLICY_TEMPLATE_XML`.
 - `ScanAgentE2eCorePolicy.ps1` — Core `/debug/hook` **pushpolicystate** → **importpolicies** (default policies **Test5-a** / **Test5-b**, SMB stores **sa05-smb-in** / **sa05-smb-out** with the same names in both policies but different `c:\temp\SA-05-*` / `c:\test\SA-05-*` folder mappings) → **commdown** (5s) → **commup** → **poppolicystate** for SA-05. Helper: `Load-Sa05CorePolicies.ps1`.

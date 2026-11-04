@@ -5,6 +5,9 @@
 #>
 Set-StrictMode -Version Latest
 
+$script:ScanAgentE2eLabPathsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+. (Join-Path $script:ScanAgentE2eLabPathsRoot 'Common\LabDeployExeLocation.ps1')
+
 function Resolve-ScanAgentDebugPath {
     <#
     .SYNOPSIS
@@ -139,7 +142,12 @@ function Get-ScanAgentE2eAgentExeCandidates {
     }
 
     & $add $PreferredExePath
-    & $add $env:SCANAGENT_EXE
+    $fromLabEnv = Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
+        'RESEC_SCANAGENT_EXE_LOCATION',
+        'LAB_SCANAGENT_EXE',
+        'SCANAGENT_EXE'
+    )
+    & $add $fromLabEnv
     $configuredAgentExe = ''
     if (Get-Variable -Scope Script -Name SaE2eScanAgentExe -ErrorAction SilentlyContinue) {
         $configuredAgentExe = [string]$script:SaE2eScanAgentExe
