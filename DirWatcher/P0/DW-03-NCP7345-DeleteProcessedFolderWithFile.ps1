@@ -241,27 +241,27 @@ try {
     Write-DwTestStep 'Wait for source file to leave incoming subfolder (move to temp on sanitize start)'
     $sourceCleared = Wait-DirWatcherE2eFileLeavesPath -FilePath $drop.FilePath -TimeoutSec $SourceClearedTimeoutSec
     if (-not $sourceCleared) {
-        throw "File still under incoming after ${SourceClearedTimeoutSec}s: $($drop.FilePath)"
+        throw "File still under incoming after $($SourceClearedTimeoutSec)s: $($drop.FilePath)"
     }
-    Write-DwTestStep 'OK — source file cleared from incoming subfolder'
+    Write-DwTestStep 'OK - source file cleared from incoming subfolder'
 
     Write-DwTestStep 'Wait for sanitized file on SMB clean destination'
     $outputPath = Wait-DirWatcherE2eCleanOutput -CleanRoot $layout.Clean -FileName $drop.FileName `
         -TimeoutSec $CleanOutputTimeoutSec
     if ([string]::IsNullOrWhiteSpace($outputPath)) {
-        throw "Timed out waiting for clean output '$($drop.FileName)' under $($layout.Clean) (${CleanOutputTimeoutSec}s)."
+        throw "Timed out waiting for clean output '$($drop.FileName)' under $($layout.Clean) ($($CleanOutputTimeoutSec)s)."
     }
-    Write-DwTestStep "OK — clean output: $outputPath"
+    Write-DwTestStep "OK - clean output: $outputPath"
 
     Write-DwTestStep 'Assert incoming subfolder is empty (directory may still exist before periodic delete)'
     $empty = Wait-DwNcp7345IncomingFolderEmpty -FolderPath $drop.FolderPath -TimeoutSec $EmptyFolderVerifyTimeoutSec
     if (-not $empty) {
         $listing = @(Get-ChildItem -LiteralPath $drop.FolderPath -Force -ErrorAction SilentlyContinue) |
             ForEach-Object { $_.FullName }
-        throw "Incoming subfolder not empty within ${EmptyFolderVerifyTimeoutSec}s: $($drop.FolderPath). Items: $($listing -join '; ')"
+        throw "Incoming subfolder not empty within $($EmptyFolderVerifyTimeoutSec)s: $($drop.FolderPath). Items: $($listing -join '; ')"
     }
     if (Test-Path -LiteralPath $drop.FolderPath) {
-        Write-DwTestStep "OK — incoming subfolder exists and is empty: $($drop.FolderPath)"
+        Write-DwTestStep "OK - incoming subfolder exists and is empty: $($drop.FolderPath)"
         # Align with DW delete age (folder CreationTime on disk, same as drop time here).
         $folderAgeAnchor = $drop.CreatedAt
     }
@@ -278,7 +278,7 @@ try {
         if (-not $deleted) {
             throw "Empty incoming subfolder was not removed by periodic delete within expected window: $($drop.FolderPath)"
         }
-        Write-DwTestStep 'OK — empty incoming subfolder removed by Delete processed folders policy'
+        Write-DwTestStep 'OK - empty incoming subfolder removed by Delete processed folders policy'
     }
 
     $script:ScenarioPassed = $true
@@ -293,39 +293,8 @@ catch {
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed) {
-        if ($layout -and $layout.WorkRoot -and (Test-Path -LiteralPath $layout.WorkRoot)) {
-            $evidenceOnFailure += $layout.WorkRoot
-        }
-        if (-not [string]::IsNullOrWhiteSpace($hookUrl)) {
-            $coreLog = Get-CoreE2eDebugLogPathEvidence -HookUrl $hookUrl
-            if ($coreLog) {
-                $evidenceOnFailure += $coreLog
-                Write-DwTestStep "Core log for evidence: $coreLog"
-            }
-        }
-        $evidenceList = [System.Collections.Generic.List[string]]::new()
-        foreach ($p in @($evidenceOnFailure)) {
-            if (-not [string]::IsNullOrWhiteSpace($p)) {
-                $evidenceList.Add($p) | Out-Null
-            }
-        }
-        Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
-        $dwLogDir = Get-DirWatcherE2eLogDirectory
-        if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
-            $evidenceList.Add($dwLogDir) | Out-Null
-        }
-        $evidenceOnFailure = @($evidenceList)
-        if (@($evidenceOnFailure).Count -gt 0) {
-            try {
-                $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label 'DW-NCP7345'
-                if ($script:EvidenceZipPath) {
-                    Write-DwTestStep "Evidence zip: $($script:EvidenceZipPath)"
-                }
-            }
-            catch {
-                Write-Warning "Could not create failure evidence zip: $($_.Exception.Message)"
-            }
-        }
+        $evidenceOnFailure = Add-DirWatcherE2eFailureEvidenceIfEligible -EvidenceZipLabel 'DW-NCP7345' `
+            -Layout $layout -HookUrl $hookUrl
     }
 
     if (-not [string]::IsNullOrWhiteSpace($env:DIRWATCHER_COMPONENT_VERSION)) {

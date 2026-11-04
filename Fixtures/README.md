@@ -6,6 +6,7 @@ All files passed through Resec products during lab E2E live here. Product script
 | --- | --- |
 | `Allowed/` | Scan Agent sanitize pass / reconstruction scenarios |
 | `Blocked/` | Blocked, infected, encrypted, file-type rejection |
+| `Blocked/NCP-7361/` | DirWatcher DW-04: unknown-type `.dat` blocked via lab policy (`Unknown File=False`) |
 | `CDR/` | Content transformation (SVG, CSV, Office, etc.) |
 | `QR/NCP-7330/` | Core debug-hook image QR regression |
 | `Office/NCP-7344/` | Core debug-hook Office with CDR disabled (NCP-7344) |

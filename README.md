@@ -25,6 +25,8 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
    .\DirWatcher\P0\DW-02-NCP7343-ProcessEmptyFolders.ps1
    .\DirWatcher\P0\DW-03-NCP7345-DeleteProcessedFolderWithFile.ps1
+   .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1
+   .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1 -RejectedBehavior 1
    ```
 
 ## Layout
@@ -39,7 +41,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Mail/` | Mail Agent E2E scripts and headless SMTP config (`Mail/Config`) |
 | `Tools/SimpleMailServer/` | Lab SMTP capture utility (`--cli`) for Mail and Core E2E |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
-| `DirWatcher/` | Directory Watcher E2E (NCP-7340 source→temp; NCP-7343 empty folders) |
+| `DirWatcher/` | Directory Watcher E2E (NCP-7340, NCP-7343, NCP-7345, NCP-7361 rejected save) |
 | `docs/` | Authoring guide for new E2E scripts — [E2E-Test-Authoring.md](docs/E2E-Test-Authoring.md) |
 
 ## Configuration
@@ -59,7 +61,8 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `LAB_FTD_REPO_ROOT` | FileTypeDetection git root |
 | `LAB_DIRWATCHER_REPO_ROOT` | DirWatcher git root |
 | `LAB_SCANAGENT_DEBUG_EXE` | Full path to `ScanAgentDebug.exe` |
-| `LAB_DIRWATCHER_EXE` | Full path to `DirWatcher.exe` |
+| `LAB_DIRWATCHER_EXE` | Full path to `DirWatcher.exe` (also set automatically when you build DirWatcher) |
+| `RESEC_DW_EXE_LOCATION` | Same as `LAB_DIRWATCHER_EXE`; canonical name set by DirWatcher **post-build** (User env) |
 
 Existing per-suite variables (`CORE_E2E_*`, `MAIL_E2E_*`, `MAILAGENT_TEST_FILES_ROOT`, `SCANAGENT_TEST_FILES_ROOT`, Test Platform `TESTPLATFORM_*`) still work.
 

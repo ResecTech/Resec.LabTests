@@ -8,8 +8,16 @@ if (-not (Test-Path -LiteralPath $coreReport)) {
 . $coreReport
 
 function Get-DirWatcherE2eReportExePath {
-    if (-not [string]::IsNullOrWhiteSpace($env:LAB_DIRWATCHER_EXE)) {
-        $fromEnv = [System.IO.Path]::GetFullPath($env:LAB_DIRWATCHER_EXE.Trim())
+    foreach ($name in @('RESEC_DW_EXE_LOCATION', 'LAB_DIRWATCHER_EXE')) {
+        $raw = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $raw = [Environment]::GetEnvironmentVariable($name, 'User')
+        }
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            continue
+        }
+
+        $fromEnv = [System.IO.Path]::GetFullPath($raw.Trim())
         if (Test-Path -LiteralPath $fromEnv -PathType Leaf) {
             return $fromEnv
         }

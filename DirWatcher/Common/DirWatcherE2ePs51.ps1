@@ -39,6 +39,25 @@ function Get-DirWatcherE2eRunningExePath {
     return $null
 }
 
+function Get-DirWatcherE2eExePathFromEnvironment {
+    foreach ($name in @('RESEC_DW_EXE_LOCATION', 'LAB_DIRWATCHER_EXE')) {
+        $raw = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $raw = [Environment]::GetEnvironmentVariable($name, 'User')
+        }
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            continue
+        }
+
+        $full = [System.IO.Path]::GetFullPath($raw.Trim())
+        if (Test-Path -LiteralPath $full -PathType Leaf) {
+            return $full
+        }
+    }
+
+    return $null
+}
+
 function Resolve-DirWatcherE2eExePath {
     param([string] $Override = '')
 
@@ -51,12 +70,10 @@ function Resolve-DirWatcherE2eExePath {
         return $full
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($env:LAB_DIRWATCHER_EXE)) {
-        $full = [System.IO.Path]::GetFullPath($env:LAB_DIRWATCHER_EXE.Trim())
-        if (Test-Path -LiteralPath $full -PathType Leaf) {
-            Register-DirWatcherE2eExePath -ExePath $full
-            return $full
-        }
+    $fromEnv = Get-DirWatcherE2eExePathFromEnvironment
+    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+        Register-DirWatcherE2eExePath -ExePath $fromEnv
+        return $fromEnv
     }
 
     $optional = $null
@@ -92,7 +109,7 @@ function Resolve-DirWatcherE2eExePath {
         }
     }
 
-    throw 'DirWatcher exe not found. Pass -DirWatcherExe or set LAB_DIRWATCHER_EXE.'
+    throw 'DirWatcher exe not found. Pass -DirWatcherExe, build DirWatcher (sets user RESEC_DW_EXE_LOCATION), or set LAB_DIRWATCHER_EXE.'
 }
 
 function Stop-DirWatcherE2eProcesses {
@@ -167,6 +184,66 @@ function Test-DirWatcherE2eProcessRunning {
     return $false
 }
 
+function Test-DirWatcherE2eShouldCollectFailureEvidence {
+    if (-not (Test-DirWatcherE2eProcessRunning)) {
+        return $false
+    }
+
+    return $true
+}
+
+function Add-DirWatcherE2eFailureEvidenceIfEligible {
+    param(
+        [Parameter(Mandatory)]
+        [string] $EvidenceZipLabel,
+        $Layout,
+        [string] $HookUrl = ''
+    )
+
+    if (-not (Test-DirWatcherE2eShouldCollectFailureEvidence)) {
+        Write-DwTestStep 'Skipping failure evidence (DirWatcher is not running)'
+        return @()
+    }
+
+    $evidenceOnFailure = @()
+    if ($Layout -and $Layout.WorkRoot -and (Test-Path -LiteralPath $Layout.WorkRoot)) {
+        $evidenceOnFailure += $Layout.WorkRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HookUrl)) {
+        $coreLog = Get-CoreE2eDebugLogPathEvidence -HookUrl $HookUrl
+        if ($coreLog) {
+            $evidenceOnFailure += $coreLog
+            Write-DwTestStep "Core log for evidence: $coreLog"
+        }
+    }
+
+    $evidenceList = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in @($evidenceOnFailure)) {
+        if (-not [string]::IsNullOrWhiteSpace($p)) {
+            $evidenceList.Add($p) | Out-Null
+        }
+    }
+    Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
+    $dwLogDir = Get-DirWatcherE2eLogDirectory
+    if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
+        $evidenceList.Add($dwLogDir) | Out-Null
+    }
+    $evidenceOnFailure = @($evidenceList)
+    if (@($evidenceOnFailure).Count -gt 0) {
+        try {
+            $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label $EvidenceZipLabel
+            if ($script:EvidenceZipPath) {
+                Write-DwTestStep "Evidence zip: $($script:EvidenceZipPath)"
+            }
+        }
+        catch {
+            Write-Warning "Could not create failure evidence zip: $($_.Exception.Message)"
+        }
+    }
+
+    return $evidenceOnFailure
+}
+
 function Set-DirWatcherE2eComponentVersionFromExe {
     param(
         [Parameter(Mandatory)]
@@ -207,7 +284,7 @@ function Ensure-DirWatcherE2eProcessRunning {
         Start-Sleep -Seconds $StartupSettleSec
     }
     if (-not (Test-DirWatcherE2eProcessRunning)) {
-        throw 'DirWatcher failed to start. Pass -DirWatcherExe or set LAB_DIRWATCHER_EXE to the deployed build.'
+        throw 'DirWatcher failed to start. Build DirWatcher (RESEC_DW_EXE_LOCATION), pass -DirWatcherExe, or set LAB_DIRWATCHER_EXE.'
     }
 
     Set-DirWatcherE2eComponentVersionFromExe -ExePath $dwExe
@@ -306,6 +383,34 @@ function Wait-DirWatcherE2eCleanOutput {
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $cleanFull -PathType Container) {
             $match = Get-ChildItem -LiteralPath $cleanFull -File -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq $expectedName } |
+                Select-Object -First 1
+            if ($null -ne $match) {
+                return $match.FullName
+            }
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $null
+}
+
+function Wait-DirWatcherE2eRejectedOutput {
+    param(
+        [Parameter(Mandatory)]
+        [string] $RejectedRoot,
+        [Parameter(Mandatory)]
+        [string] $FileName,
+        [int] $TimeoutSec = 120,
+        [int] $PollMs = 500
+    )
+
+    $rejectedFull = [System.IO.Path]::GetFullPath($RejectedRoot)
+    $expectedName = [System.IO.Path]::GetFileName($FileName)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $rejectedFull -PathType Container) {
+            $match = Get-ChildItem -LiteralPath $rejectedFull -File -Recurse -Force -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -eq $expectedName } |
                 Select-Object -First 1
             if ($null -ne $match) {
@@ -425,10 +530,14 @@ function Wait-DirWatcherE2eIncomingFolderDeletedByPolicy {
 }
 
 function New-DirWatcherE2eWorkLayout {
-    param([string] $WorkRoot = '')
+    param(
+        [string] $WorkRoot = '',
+        [string] $DefaultWorkRootPrefix = 'DW-E2E'
+    )
 
     if ([string]::IsNullOrWhiteSpace($WorkRoot)) {
-        $WorkRoot = Join-Path 'C:\test' ('DW-NCP7340-' + [Guid]::NewGuid().ToString('N'))
+        $prefix = if ([string]::IsNullOrWhiteSpace($DefaultWorkRootPrefix)) { 'DW-E2E' } else { $DefaultWorkRootPrefix.Trim() }
+        $WorkRoot = Join-Path 'C:\test' ($prefix + '-' + [Guid]::NewGuid().ToString('N'))
     }
 
     $root = [System.IO.Path]::GetFullPath($WorkRoot)
@@ -507,19 +616,23 @@ function Test-DirWatcherE2eLogShowsMonitoringIncoming {
         return $false
     }
 
-    $tail = Get-Content -LiteralPath $logFilePath -Tail 600 -ErrorAction SilentlyContinue
-    foreach ($line in @($tail)) {
-        if ([string]::IsNullOrWhiteSpace([string]$line)) {
+    $tail = @(Get-Content -LiteralPath $logFilePath -Tail 600 -ErrorAction SilentlyContinue)
+    if ($tail.Count -eq 0) {
+        return $false
+    }
+
+    $lastRootLineIndex = -1
+    for ($i = 0; $i -lt $tail.Count; $i++) {
+        $lineText = [string]$tail[$i]
+        if ([string]::IsNullOrWhiteSpace($lineText)) {
             continue
         }
 
-        $lineText = [string]$line
-        $pathHit = ($lineText.IndexOf($incomingKey, [StringComparison]::OrdinalIgnoreCase) -ge 0)
-        if (-not $pathHit) {
+        if ($lineText -notmatch 'Root folder:') {
             continue
         }
 
-        if ($lineText -notmatch 'Monitoring folder:|Root folder:|DEBUG: E2E logmark:') {
+        if ($lineText.IndexOf($incomingKey, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
             continue
         }
 
@@ -543,7 +656,18 @@ function Test-DirWatcherE2eLogShowsMonitoringIncoming {
             }
         }
 
-        return $true
+        $lastRootLineIndex = $i
+    }
+
+    if ($lastRootLineIndex -lt 0) {
+        return $false
+    }
+
+    for ($j = $lastRootLineIndex; $j -lt $tail.Count; $j++) {
+        $afterRoot = [string]$tail[$j]
+        if ($afterRoot -match 'Waiting for work|DirectoryWatcher is running') {
+            return $true
+        }
     }
 
     return $false
@@ -580,7 +704,7 @@ function Wait-DirWatcherE2eMonitoringIncoming {
             if ($null -ne $lastStatus) {
                 try {
                     if (Test-DirWatcherE2eDebugMonitoringIncoming -IncomingRoot $incomingFull -BaseUrl $DebugBaseUrl -Status $lastStatus) {
-                        Write-DwTestStep "DirWatcher debug confirms monitoring: $incomingFull"
+                        Write-DwTestStep "DirWatcher debug confirms monitoring (watchers armed): $incomingFull"
                         Write-DirWatcherE2eDebugLogMark -Message "Monitoring ready $incomingFull" -BaseUrl $DebugBaseUrl
                         return $true
                     }
@@ -590,28 +714,17 @@ function Wait-DirWatcherE2eMonitoringIncoming {
                 }
             }
 
-            try {
-                if (Test-DirWatcherE2eLogShowsMonitoringIncoming -IncomingRoot $incomingFull -NotBeforeLocal $NotBeforeLocal -DebugBaseUrl $DebugBaseUrl) {
-                    Write-DwTestStep "DirWatcher log confirms monitoring (debug state still catching up): $incomingFull"
-                    Write-DirWatcherE2eDebugLogMark -Message "Monitoring ready $incomingFull" -BaseUrl $DebugBaseUrl
-                    return $true
-                }
-            }
-            catch {
-                # optional log tail
-            }
-
             Start-Sleep -Milliseconds $PollMs
         }
 
         $detail = Format-DirWatcherE2eDebugConnectionSummary -Status $lastStatus
-        throw "Timed out waiting for DirWatcher debug connection.state (monitoring $incomingFull within ${TimeoutSec}s). Last: $detail"
+        throw "Timed out waiting for DirWatcher debug connection.state (monitoring $incomingFull within $($TimeoutSec)s). Last: $detail"
     }
 
     Write-DwTestStep 'DirWatcher debug hook not reachable; falling back to log tail for Monitoring folder:'
     $logDir = Get-DirWatcherE2eLogDirectory
     if ([string]::IsNullOrWhiteSpace($logDir)) {
-        Write-DwTestStep "DirWatcher log dir not found; waiting ${TimeoutSec}s after restart without log check"
+        Write-DwTestStep "DirWatcher log dir not found; waiting $($TimeoutSec)s after restart without log check"
         Start-Sleep -Seconds ([Math]::Min($TimeoutSec, 15))
         return $true
     }
@@ -626,4 +739,61 @@ function Wait-DirWatcherE2eMonitoringIncoming {
     }
 
     throw "Timed out waiting for DirWatcher log to show monitoring incoming folder: $incomingFull"
+}
+
+function Wait-DirWatcherE2eMonitoringStable {
+    param(
+        [Parameter(Mandatory)]
+        [string] $IncomingRoot,
+        [int] $TimeoutSec = 90,
+        [int] $SettleSec = 8,
+        [int] $PollMs = 500,
+        [datetime] $NotBeforeLocal = [datetime]::MinValue,
+        [string] $DebugBaseUrl = ''
+    )
+
+    Wait-DirWatcherE2eMonitoringIncoming -IncomingRoot $IncomingRoot -TimeoutSec $TimeoutSec `
+        -NotBeforeLocal $NotBeforeLocal -DebugBaseUrl $DebugBaseUrl | Out-Null
+
+    if (-not (Test-DirWatcherE2eDebugHookReachable -BaseUrl $DebugBaseUrl)) {
+        Write-DwTestStep "DirWatcher debug hook unavailable; sleeping $($SettleSec)s after initial monitoring ready"
+        Start-Sleep -Seconds $SettleSec
+        return $true
+    }
+
+    Write-DwTestStep "Waiting for DirWatcher monitoring to stay stable $($SettleSec)s (late policy refresh / OnConnectionUp)"
+    $stableRequiredMs = [double]($SettleSec * 1000)
+    $stableSince = $null
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $ready = $false
+        try {
+            $ready = Test-DirWatcherE2eDebugMonitoringIncoming -IncomingRoot $IncomingRoot -BaseUrl $DebugBaseUrl
+        }
+        catch {
+            $ready = $false
+        }
+
+        if ($ready) {
+            if ($null -eq $stableSince) {
+                $stableSince = [DateTimeOffset]::UtcNow
+            }
+            elseif (([DateTimeOffset]::UtcNow - $stableSince).TotalMilliseconds -ge $stableRequiredMs) {
+                Write-DwTestStep "DirWatcher monitoring stable for $($SettleSec)s - OK to drop"
+                Write-DirWatcherE2eDebugLogMark -Message "Monitoring stable $IncomingRoot" -BaseUrl $DebugBaseUrl
+                return $true
+            }
+        }
+        else {
+            if ($null -ne $stableSince) {
+                Write-DwTestStep 'DirWatcher monitoring reset (policy refresh); restarting settle timer'
+            }
+            $stableSince = $null
+        }
+
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    throw "Timed out waiting for stable DirWatcher monitoring ($($SettleSec)s continuous ready within $($TimeoutSec)s)."
 }

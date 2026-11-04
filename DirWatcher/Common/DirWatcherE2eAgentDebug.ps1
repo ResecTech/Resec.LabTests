@@ -260,7 +260,11 @@ function Test-DirWatcherE2eDebugMonitoringIncoming {
     }
 
     $watchersArmed = Test-DirWatcherE2eDebugStatusBool -Status $Status -Name 'directoryWatcherWatchersArmed'
-    $phaseReady = ($phase -eq 'Monitoring') -or ($watchersArmed -and $phase -eq 'Starting')
+    if (-not $watchersArmed) {
+        return $false
+    }
+
+    $phaseReady = ($phase -eq 'Monitoring') -or ($phase -eq 'Starting')
     if (-not $phaseReady) {
         return $false
     }

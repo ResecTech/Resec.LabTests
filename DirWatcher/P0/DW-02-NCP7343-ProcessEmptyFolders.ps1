@@ -153,9 +153,9 @@ function Wait-DwNcp7343SanitizedCleanFolder {
     $outputPath = Wait-DirWatcherE2eCleanOutputDirectory -CleanRoot $CleanRoot -DirectoryName $FolderName `
         -TimeoutSec $CleanOutputTimeoutSec
     if ([string]::IsNullOrWhiteSpace($outputPath)) {
-        throw "Empty folder '$FolderName' did not appear under clean root $CleanRoot within ${CleanOutputTimeoutSec}s."
+        throw "Empty folder '$FolderName' did not appear under clean root $CleanRoot within $($CleanOutputTimeoutSec)s."
     }
-    Write-DwTestStep "OK — clean output folder: $outputPath"
+    Write-DwTestStep "OK - clean output folder: $outputPath"
     return $outputPath
 }
 
@@ -203,7 +203,7 @@ try {
     if (-not (Wait-DirWatcherE2ePathPresent -Path $drop1.Path -TimeoutSec $IncomingRetainVerifySec)) {
         throw "Incoming folder should remain with Delete processed folders = 0, but path is missing: $($drop1.Path)"
     }
-    Write-DwTestStep 'OK — incoming folder still present (expected default behavior)'
+    Write-DwTestStep 'OK - incoming folder still present (expected default behavior)'
 
     if ($SkipPolicyImport) {
         Write-DwTestStep 'SkipPolicyImport: skipping phase 2 (delete processed folders policy change)'
@@ -227,7 +227,7 @@ try {
         if (-not (Test-Path -LiteralPath $drop2.Path)) {
             throw "Incoming folder missing too early (phase 2): $($drop2.Path)"
         }
-        Write-DwTestStep 'OK — incoming folder still present before periodic delete'
+        Write-DwTestStep 'OK - incoming folder still present before periodic delete'
 
         Write-DwTestStep "Wait for periodic cleanup (policy ${DeleteProcessedFoldersAfterMinutes} min + slack)"
         $deleted = Wait-DirWatcherE2eIncomingFolderDeletedByPolicy `
@@ -237,7 +237,7 @@ try {
         if (-not $deleted) {
             throw "Incoming folder was not removed by periodic delete policy within expected window: $($drop2.Path)"
         }
-        Write-DwTestStep 'OK — incoming folder removed by Delete processed folders policy'
+        Write-DwTestStep 'OK - incoming folder removed by Delete processed folders policy'
     }
 
     $script:ScenarioPassed = $true
@@ -252,39 +252,8 @@ catch {
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed) {
-        if ($layout -and $layout.WorkRoot -and (Test-Path -LiteralPath $layout.WorkRoot)) {
-            $evidenceOnFailure += $layout.WorkRoot
-        }
-        if (-not [string]::IsNullOrWhiteSpace($hookUrl)) {
-            $coreLog = Get-CoreE2eDebugLogPathEvidence -HookUrl $hookUrl
-            if ($coreLog) {
-                $evidenceOnFailure += $coreLog
-                Write-DwTestStep "Core log for evidence: $coreLog"
-            }
-        }
-        $evidenceList = [System.Collections.Generic.List[string]]::new()
-        foreach ($p in @($evidenceOnFailure)) {
-            if (-not [string]::IsNullOrWhiteSpace($p)) {
-                $evidenceList.Add($p) | Out-Null
-            }
-        }
-        Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
-        $dwLogDir = Get-DirWatcherE2eLogDirectory
-        if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
-            $evidenceList.Add($dwLogDir) | Out-Null
-        }
-        $evidenceOnFailure = @($evidenceList)
-        if (@($evidenceOnFailure).Count -gt 0) {
-            try {
-                $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label 'DW-NCP7343'
-                if ($script:EvidenceZipPath) {
-                    Write-DwTestStep "Evidence zip: $($script:EvidenceZipPath)"
-                }
-            }
-            catch {
-                Write-Warning "Could not create failure evidence zip: $($_.Exception.Message)"
-            }
-        }
+        $evidenceOnFailure = Add-DirWatcherE2eFailureEvidenceIfEligible -EvidenceZipLabel 'DW-NCP7343' `
+            -Layout $layout -HookUrl $hookUrl
     }
 
     if (-not [string]::IsNullOrWhiteSpace($env:DIRWATCHER_COMPONENT_VERSION)) {

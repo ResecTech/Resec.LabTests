@@ -190,9 +190,9 @@ try {
     Write-DwTestStep 'Assert source file leaves incoming folder (move to temp on sanitize start)'
     $sourceCleared = Wait-DirWatcherE2eFileLeavesPath -FilePath $dropPath -TimeoutSec $SourceClearedTimeoutSec
     if (-not $sourceCleared) {
-        throw "NCP-7340 regression: file still in source folder after ${SourceClearedTimeoutSec}s: $dropPath"
+        throw "NCP-7340 regression: file still in source folder after $($SourceClearedTimeoutSec)s: $dropPath"
     }
-    Write-DwTestStep 'OK — source path cleared'
+    Write-DwTestStep 'OK - source path cleared'
 
     $tempHit = Wait-DirWatcherE2eTempContainsCopy -TempRoot $layout.Temp -ExpectedLength $fixtureLength -TimeoutSec 0
     if (-not [string]::IsNullOrWhiteSpace($tempHit)) {
@@ -206,9 +206,9 @@ try {
     $outputPath = Wait-DirWatcherE2eCleanOutput -CleanRoot $layout.Clean -FileName $dropName `
         -TimeoutSec $CleanOutputTimeoutSec
     if ([string]::IsNullOrWhiteSpace($outputPath)) {
-        throw "Timed out waiting for clean output '$dropName' under $($layout.Clean) (${CleanOutputTimeoutSec}s)."
+        throw "Timed out waiting for clean output '$dropName' under $($layout.Clean) ($($CleanOutputTimeoutSec)s)."
     }
-    Write-DwTestStep "OK — clean output: $outputPath"
+    Write-DwTestStep "OK - clean output: $outputPath"
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
@@ -222,39 +222,8 @@ catch {
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed) {
-        if ($layout -and $layout.WorkRoot -and (Test-Path -LiteralPath $layout.WorkRoot)) {
-            $evidenceOnFailure += $layout.WorkRoot
-        }
-        if (-not [string]::IsNullOrWhiteSpace($hookUrl)) {
-            $coreLog = Get-CoreE2eDebugLogPathEvidence -HookUrl $hookUrl
-            if ($coreLog) {
-                $evidenceOnFailure += $coreLog
-                Write-DwTestStep "Core log for evidence: $coreLog"
-            }
-        }
-        $evidenceList = [System.Collections.Generic.List[string]]::new()
-        foreach ($p in @($evidenceOnFailure)) {
-            if (-not [string]::IsNullOrWhiteSpace($p)) {
-                $evidenceList.Add($p) | Out-Null
-            }
-        }
-        Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
-        $dwLogDir = Get-DirWatcherE2eLogDirectory
-        if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
-            $evidenceList.Add($dwLogDir) | Out-Null
-        }
-        $evidenceOnFailure = @($evidenceList)
-        if (@($evidenceOnFailure).Count -gt 0) {
-            try {
-                $script:EvidenceZipPath = New-CoreE2eFailureEvidenceZip -Paths $evidenceOnFailure -Label 'DW-NCP7340'
-                if ($script:EvidenceZipPath) {
-                    Write-DwTestStep "Evidence zip: $($script:EvidenceZipPath)"
-                }
-            }
-            catch {
-                Write-Warning "Could not create failure evidence zip: $($_.Exception.Message)"
-            }
-        }
+        $evidenceOnFailure = Add-DirWatcherE2eFailureEvidenceIfEligible -EvidenceZipLabel 'DW-NCP7340' `
+            -Layout $layout -HookUrl $hookUrl
     }
 
     if (-not [string]::IsNullOrWhiteSpace($env:DIRWATCHER_COMPONENT_VERSION)) {
