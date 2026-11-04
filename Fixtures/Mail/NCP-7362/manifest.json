@@ -1,0 +1,8 @@
+{
+  "ticket": "NCP-7362",
+  "fixtureFile": "RDP-verification-no-from.eml",
+  "description": "Jira attachment RDP verification.eml — empty From header, To Ben Lazarev.",
+  "expectedToContains": "ben@resec.co",
+  "expectEmptyFrom": true,
+  "expectedSubjectContains": "RDP verification"
+}

@@ -132,8 +132,23 @@ Get explicit approval before adding DEBUG surface area or changing production AP
 | # | Item | Why it matters |
 |---|------|----------------|
 | 1 | **`config\lab.local.json`** | Product repo roots, optional exe paths, Test Platform key. Created via `scripts\Initialize-LabConfig.ps1`. |
-| 2 | **Env overrides** | Document `CORE_E2E_*`, `MAIL_E2E_*`, `LAB_*_REPO_ROOT`, fixture roots in script help. |
+| 2 | **Env overrides** | Document `CORE_E2E_*`, `MAIL_E2E_*`, `LAB_*_REPO_ROOT`, fixture roots in script help. For WebMC REST, also document `CORE_E2E_WMC_USER` / `CORE_E2E_WMC_PASSWORD` (see below). |
 | 3 | **Hook URL** | Default from lab config; `-CoreDebugHookUrl` override. Portal REST base URL must match management port (helpers in `CoreE2ePortalApi.ps1`). |
+
+## WebMC REST (management API)
+
+Tests that call the same endpoints as the WebMC Emails grid (for example `POST /v1/sanitizations/email`) authenticate with the **Core administrator account**, not the Password Portal secret. Helpers live in `Core\Common\CoreE2eWmcApi.ps1` (`Connect-CoreE2eWmcRestSession`, `Get-CoreE2eWmcEmailSanitizationRow`).
+
+| # | Item | Why it matters |
+|---|------|----------------|
+| 1 | **Base URL** | Same host and TLS port as Core management REST (typically derived from the debug hook URL — `CoreE2ePortalApi.ps1` / `Get-CoreE2eCoreRestBaseUrl`). |
+| 2 | **Default credentials** | **`resec_admin` / `resec_admin`** — matches Core **`AdminUser` / `AdminPassword`** on a default install. Scripts use these when env and parameters are unset. |
+| 3 | **When the lab password differs** | Set **`CORE_E2E_WMC_PASSWORD`** to the Core admin password configured on that machine (and **`CORE_E2E_WMC_USER`** if the admin user name is not `resec_admin`). Per-script overrides: **`-WmcPassword`** / **`-WmcUser`** (see `NCP7362-WmcEmptyFromAddress.ps1`). |
+| 4 | **Prerequisites in help** | List WMC login in comment-based help when the scenario uses management REST. Failures with `WMC login failed` almost always mean wrong user/password for that Core instance. |
+| 5 | **Access level** | Email sanitization queries need **Viewer+** on the admin account (same as opening the Emails page in WebMC). |
+| 6 | **Query body** | WebMC sends **`startTime`** and **`endTime`** on sanitization queries. E2E helpers must include a date range; omitting both makes Core filter on `DateTime.MinValue` and return no rows. |
+
+Reference: `Core/NCP7362-WmcEmptyFromAddress.ps1` and `Core/README.md` (NCP-7362 section).
 
 ## Documentation and maintenance
 
@@ -150,8 +165,9 @@ Get explicit approval before adding DEBUG surface area or changing production AP
 | 1 | Core | `Core/NCP7344-OfficeNoCdrSanitize.ps1` | Policy import, sanitize loop, version, evidence zip, reporting `finally` |
 | 2 | Core | `Core/NCP7352-JobEmailNotificationBlocked.ps1` | System properties stack, SMTP capture, multi-scenario |
 | 3 | Core | `Core/NCP7360-PortalBlockedArchiveStatus.ps1` | Portal REST + debug hook, runtime fixture, version reporting |
-| 4 | Scan Agent | `ScanAgent/Common/README.md` | Bootstrap, reporting, destination folders, Core policy helpers |
-| 5 | DirWatcher | `DirWatcher/P0/DW-01-…` | Agent debug hook, Core policy, process teardown |
+| 4 | Core | `Core/NCP7362-WmcEmptyFromAddress.ps1` | WMC REST login + `/v1/sanitizations/email`, checked-in EML fixture |
+| 5 | Scan Agent | `ScanAgent/Common/README.md` | Bootstrap, reporting, destination folders, Core policy helpers |
+| 6 | DirWatcher | `DirWatcher/P0/DW-01-…` | Agent debug hook, Core policy, process teardown |
 
 ## Pre-merge self-check
 
