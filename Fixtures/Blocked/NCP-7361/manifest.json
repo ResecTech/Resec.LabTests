@@ -1,0 +1,6 @@
+{
+  "ticket": "NCP-7361",
+  "description": "Unknown file type blocked by policy (Unknown File=False); failed sanitize must copy to DirWatcher rejected folder.",
+  "fixturePath": "unknown-blocked.dat",
+  "notes": "Not a standard FTD type; paired with NCP7361-dw-rejected-save-lab AllowedFileTypes line."
+}
