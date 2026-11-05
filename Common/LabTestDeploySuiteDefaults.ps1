@@ -57,7 +57,7 @@ function Get-CoreDeployRequirements {
     return @(
         [PSCustomObject]@{
             DeployScriptId  = 'Core'
-            RequiresRunning = $true
+            RequiresRunning = $false
         }
     )
 }

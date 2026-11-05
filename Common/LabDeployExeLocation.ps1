@@ -5,7 +5,7 @@
 #>
 Set-StrictMode -Version Latest
 
-. (Join-Path $PSScriptRoot 'Set-ResecLabExeLocationUserEnv.ps1')
+. (Join-Path $PSScriptRoot 'Set-ResecLabExeLocationUserEnv.Function.ps1')
 
 function Get-ResecLabDeployExeLocationProfile {
     param(

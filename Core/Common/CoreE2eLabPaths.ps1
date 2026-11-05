@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-. (Join-Path $PSScriptRoot 'LabDeployExeLocation.ps1')
+. (Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1')
 
 function Get-CoreE2eCoreExePathFromEnvironment {
     return Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(

@@ -8,7 +8,12 @@
 #>
 Set-StrictMode -Version Latest
 
+$script:CoreE2eStartedByScenario = $false
+$script:CoreE2eAutoStartLogPath = $null
+$script:CoreE2eAutoStartErrLogPath = $null
 $script:CoreE2eDebugTlsBypassEnabled = $false
+$script:CoreE2eDebugHookReadyPollTimeoutSec = 5
+$script:CoreE2eDebugHookReadyWaitPollTimeoutSec = 120
 
 function Enable-CoreE2eDebugTlsBypass {
     if ($script:CoreE2eDebugTlsBypassEnabled) {
@@ -145,19 +150,381 @@ function Assert-CoreE2eDebugHookResponse {
     }
 }
 
+function Test-CoreE2eCoreInstallDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ExePath
+    )
+
+    $dir = [System.IO.Path]::GetDirectoryName($ExePath)
+    if ([string]::IsNullOrWhiteSpace($dir)) {
+        return $false
+    }
+
+    foreach ($configName in @(
+            'appsettings.json'
+            'AppSettings.json'
+            'appsettings.windows.json'
+            'appsettings.linux.json'
+            'AppSettings.example.json'
+        )) {
+        $configPath = Join-Path $dir $configName
+        if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Ensure-CoreE2eCoreAppSettingsBesideExe {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ExePath
+    )
+
+    $dir = [System.IO.Path]::GetDirectoryName($ExePath)
+    if ([string]::IsNullOrWhiteSpace($dir)) {
+        return
+    }
+
+    $target = Join-Path $dir 'appsettings.json'
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        return
+    }
+
+    foreach ($templateName in @('AppSettings.example.json', 'appsettings.windows.json')) {
+        $template = Join-Path $dir $templateName
+        if (Test-Path -LiteralPath $template -PathType Leaf) {
+            Copy-Item -LiteralPath $template -Destination $target -Force
+            Write-CoreE2eStep "Created appsettings.json from $templateName for lab auto-start"
+            return
+        }
+    }
+}
+
+function Get-CoreE2eLabCoreExePathFromEnvironment {
+    foreach ($name in @('RESEC_CORE_EXE_LOCATION', 'LAB_CORE_EXE', 'CORE_E2E_CORE_EXE')) {
+        foreach ($scope in @('User', 'Process', 'Machine')) {
+            $raw = [Environment]::GetEnvironmentVariable($name, $scope)
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                continue
+            }
+
+            try {
+                $full = [System.IO.Path]::GetFullPath($raw.Trim())
+            }
+            catch {
+                continue
+            }
+
+            if (Test-Path -LiteralPath $full -PathType Leaf) {
+                return $full
+            }
+        }
+    }
+
+    return $null
+}
+
+function Test-CoreE2eCoreExePathUsable {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ExePath,
+        [switch] $RequireAppSettings
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExePath)) {
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+        return $false
+    }
+
+    if ($RequireAppSettings -and -not (Test-CoreE2eCoreInstallDirectory -ExePath $ExePath)) {
+        return $false
+    }
+
+    if ($ExePath -match '\\artifacts\\') {
+        return $false
+    }
+
+    return $true
+}
+
+function Resolve-CoreE2eCoreExePath {
+    param([string] $Override = '')
+
+    $attempts = New-Object System.Collections.Generic.List[string]
+
+    $ordered = @(
+        $(if (-not [string]::IsNullOrWhiteSpace($Override)) { [System.IO.Path]::GetFullPath($Override.Trim()) })
+        $(Get-CoreE2eLabCoreExePathFromEnvironment)
+    )
+
+    $labDeployPath = Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1'
+    if (-not (Get-Command Find-ResecLabDeployExecutable -ErrorAction SilentlyContinue)) {
+        . ([System.IO.Path]::GetFullPath($labDeployPath))
+    }
+
+    $fromProduction = Resolve-CoreE2eCoreExePathFromLabProductionRoot
+    if (-not [string]::IsNullOrWhiteSpace($fromProduction)) {
+        $ordered += $fromProduction
+    }
+
+    $searchRoots = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:LAB_CORE_REPO_ROOT)) {
+        $null = $searchRoots.Add([System.IO.Path]::GetFullPath($env:LAB_CORE_REPO_ROOT.Trim()))
+    }
+
+    if (Get-Command Get-LabProductRepoRoot -ErrorAction SilentlyContinue) {
+        try {
+            $null = $searchRoots.Add([System.IO.Path]::GetFullPath((Get-LabProductRepoRoot -Product Core)))
+        }
+        catch {
+        }
+    }
+
+    if ($searchRoots.Count -eq 0) {
+        $labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $siblingCore = [System.IO.Path]::GetFullPath((Join-Path $labTestsRoot '..\Resec.Core.Server'))
+        if (Test-Path -LiteralPath $siblingCore -PathType Container) {
+            $null = $searchRoots.Add($siblingCore)
+        }
+    }
+
+    foreach ($repoRoot in @($searchRoots.ToArray())) {
+        $fromRepo = Find-ResecLabDeployExecutable -SearchRoots @($repoRoot) `
+            -ExecutableFileNames @('Resec.Core.exe')
+        if (-not [string]::IsNullOrWhiteSpace($fromRepo)) {
+            $ordered += $fromRepo
+        }
+    }
+
+    foreach ($candidate in @($ordered | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        $null = $attempts.Add($candidate)
+        if (Test-CoreE2eCoreExePathUsable -ExePath $candidate -RequireAppSettings) {
+            return $candidate
+        }
+    }
+
+    $listed = ($attempts.ToArray() | Select-Object -Unique) -join '; '
+    throw @"
+No runnable Core install found (Resec.Core.exe directory must contain appsettings.json; artifacts\ builds are ignored).
+Checked, in order: RESEC_CORE_EXE_LOCATION / LAB_CORE_EXE / CORE_E2E_CORE_EXE (User, then Process), lab deploy under LAB_PRODUCTION_ROOT, then repo search.
+Paths tried: $listed
+Set RESEC_CORE_EXE_LOCATION to your bin output (e.g. ...\bin\26.2\Debug\Resec.Core.exe) and ensure appsettings.json exists beside the exe.
+"@
+}
+
+function Resolve-CoreE2eCoreExePathFromLabProductionRoot {
+    if ([string]::IsNullOrWhiteSpace($env:LAB_PRODUCTION_ROOT)) {
+        return $null
+    }
+
+    $fixturesPath = Join-Path $PSScriptRoot '..\..\Common\LabTestDeployFixtures.ps1'
+    $fixturesFull = [System.IO.Path]::GetFullPath($fixturesPath)
+    if (-not (Get-Command Get-LabDeployLocalBuilds -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path -LiteralPath $fixturesFull)) {
+            return $null
+        }
+
+        . $fixturesFull
+    }
+
+    if (-not (Get-Command Find-ResecLabDeployExecutable -ErrorAction SilentlyContinue)) {
+        $labDeployPath = Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1'
+        . ([System.IO.Path]::GetFullPath($labDeployPath))
+    }
+
+    $builds = Get-LabDeployLocalBuilds -ProductionDownloadRoot $env:LAB_PRODUCTION_ROOT -DeployScriptId 'Core'
+    foreach ($build in $builds) {
+        $deployFolder = Get-LabDeployTargetFolder -BuildFolderPath $build.FolderPath
+        $fromDeploy = Find-ResecLabDeployExecutable -SearchRoots @($deployFolder) `
+            -ExecutableFileNames @('Resec.Core.exe')
+        if (-not [string]::IsNullOrWhiteSpace($fromDeploy)) {
+            if (Test-CoreE2eCoreExePathUsable -ExePath $fromDeploy -RequireAppSettings) {
+                return $fromDeploy
+            }
+        }
+    }
+
+    return $null
+}
+
+function Test-CoreE2eProcessRunning {
+    return $null -ne (Get-Process -Name 'Resec.Core' -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
+function Write-CoreE2eStep {
+    param([Parameter(Mandatory)][string] $Message)
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] $Message"
+}
+
+function Test-CoreE2eDebugHookRetryableFailure {
+    param([Parameter(Mandatory)] [string] $Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        return $false
+    }
+
+    if ($Message -match 'actively refused|No connection could be made|Unable to connect|connection attempt failed|Unable to connect to the remote server|No such host is known|The operation has timed out|timed out|HttpClient\.Timeout|canceled due to the configured|The request was canceled') {
+        return $true
+    }
+
+    return $false
+}
+
+function Test-CoreE2eDebugHookConnectionFailure {
+    param([Parameter(Mandatory)] [string] $Message)
+
+    return (Test-CoreE2eDebugHookRetryableFailure -Message $Message)
+}
+
+function Test-CoreE2eDebugHookReachable {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [int] $TimeoutSec = $script:CoreE2eDebugHookReadyPollTimeoutSec
+    )
+
+    try {
+        $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'ready' -TimeoutSec $TimeoutSec
+        Assert-CoreE2eDebugHookResponse -Response $response -Step 'ready'
+        return @{
+            Reachable       = $true
+            CoreInitialized = ($response.coreInitialized -eq $true)
+            Response        = $response
+        }
+    }
+    catch {
+        $msg = $_.Exception.Message
+        $inner = $_.Exception.InnerException
+        while ($null -ne $inner) {
+            $msg = "$msg $($inner.Message)"
+            $inner = $inner.InnerException
+        }
+
+        if (Test-CoreE2eDebugHookConnectionFailure -Message $msg) {
+            return @{
+                Reachable       = $false
+                CoreInitialized = $false
+                Response        = $null
+            }
+        }
+
+        throw
+    }
+}
+
+function Ensure-CoreE2eServerRunning {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $CoreExe = ''
+    )
+
+    Write-CoreE2eStep 'Probing Core debug hook (command=ready)'
+    $state = Test-CoreE2eDebugHookReachable -HookUrl $HookUrl
+    if ($state.CoreInitialized) {
+        Write-CoreE2eStep 'Core debug hook reports coreInitialized=true'
+        return $state.Response
+    }
+
+    if ($state.Reachable) {
+        Write-CoreE2eStep 'Core debug hook reachable; waiting for coreInitialized'
+        return $null
+    }
+
+    if (Test-CoreE2eProcessRunning) {
+        Write-CoreE2eStep 'Resec.Core process is already running; waiting for debug hook'
+        return $null
+    }
+
+    $coreExePath = Resolve-CoreE2eCoreExePath -Override $CoreExe
+    Ensure-CoreE2eCoreAppSettingsBesideExe -ExePath $coreExePath
+    Write-CoreE2eStep "Starting Core: $coreExePath"
+    Start-CoreE2eServerProcess -ExePath $coreExePath
+    return $null
+}
+
+function Get-CoreE2eAutoStartProcessLogPath {
+    return $script:CoreE2eAutoStartLogPath
+}
+
+function Get-CoreE2eAutoStartProcessLogPaths {
+    $paths = @()
+    if (-not [string]::IsNullOrWhiteSpace($script:CoreE2eAutoStartLogPath)) {
+        $paths += $script:CoreE2eAutoStartLogPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:CoreE2eAutoStartErrLogPath)) {
+        $paths += $script:CoreE2eAutoStartErrLogPath
+    }
+    return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Start-CoreE2eServerProcess {
+    param(
+        [Parameter(Mandatory)]
+        [string] $ExePath
+    )
+
+    $full = Resolve-CoreE2eCoreExePath -Override $ExePath
+    $workDir = [System.IO.Path]::GetDirectoryName($full)
+    if ([string]::IsNullOrWhiteSpace($workDir)) {
+        throw "Cannot determine working directory for Core exe: $full"
+    }
+
+    $baseName = "CoreE2e-autostart-{0}" -f [Guid]::NewGuid().ToString('N')
+    $script:CoreE2eAutoStartLogPath = Join-Path $env:TEMP ("{0}.stdout.log" -f $baseName)
+    $script:CoreE2eAutoStartErrLogPath = Join-Path $env:TEMP ("{0}.stderr.log" -f $baseName)
+    Write-CoreE2eStep "Core process stdout log: $script:CoreE2eAutoStartLogPath"
+    Write-CoreE2eStep "Core process stderr log: $script:CoreE2eAutoStartErrLogPath"
+
+    $startParams = @{
+        FilePath               = $full
+        WorkingDirectory       = $workDir
+        WindowStyle            = 'Hidden'
+        PassThru               = $true
+        RedirectStandardOutput = $script:CoreE2eAutoStartLogPath
+        RedirectStandardError  = $script:CoreE2eAutoStartErrLogPath
+    }
+
+    $null = Start-Process @startParams
+    $script:CoreE2eStartedByScenario = $true
+}
+
 function Wait-CoreE2eReady {
     param(
         [Parameter(Mandatory)]
         [string] $HookUrl,
-        [int] $TimeoutSec = 300,
-        [string] $LogMarkStep
+        [int] $TimeoutSec = 600,
+        [string] $LogMarkStep,
+        [bool] $AutoStartCore = $true,
+        [switch] $SkipAutoStartCore,
+        [switch] $SkipInitialAutoStart,
+        [string] $CoreExe = ''
     )
+
+    if ($SkipAutoStartCore) {
+        $AutoStartCore = $false
+    }
+
+    $autoStartEnabled = $AutoStartCore
+
+    if ($autoStartEnabled -and -not $SkipInitialAutoStart) {
+        Ensure-CoreE2eServerRunning -HookUrl $HookUrl -CoreExe $CoreExe | Out-Null
+    }
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
     $hookReachableMarked = $false
+    $autoStartRetried = $false
+    $readyPollSec = $script:CoreE2eDebugHookReadyWaitPollTimeoutSec
+    $lastWaitLogUtc = [DateTimeOffset]::UtcNow
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         try {
-            $r = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'ready'
+            $r = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'ready' -TimeoutSec $readyPollSec
             Assert-CoreE2eDebugHookResponse -Response $r -Step 'ready'
 
             if (-not $hookReachableMarked -and -not [string]::IsNullOrWhiteSpace($LogMarkStep)) {
@@ -174,18 +541,34 @@ function Wait-CoreE2eReady {
 
                 return $r
             }
+
+            if (([DateTimeOffset]::UtcNow - $lastWaitLogUtc).TotalSeconds -ge 30) {
+                Write-CoreE2eStep 'Core debug hook reachable; still waiting for coreInitialized (startup can take several minutes)'
+                $lastWaitLogUtc = [DateTimeOffset]::UtcNow
+            }
         }
         catch {
             $msg = $_.Exception.Message
-            if ($msg -notmatch 'actively refused|No connection could be made|Unable to connect|connection attempt failed') {
+            $inner = $_.Exception.InnerException
+            while ($null -ne $inner) {
+                $msg = "$msg $($inner.Message)"
+                $inner = $inner.InnerException
+            }
+
+            if (-not (Test-CoreE2eDebugHookRetryableFailure -Message $msg)) {
                 throw
+            }
+
+            if ($autoStartEnabled -and -not $autoStartRetried) {
+                $autoStartRetried = $true
+                Ensure-CoreE2eServerRunning -HookUrl $HookUrl -CoreExe $CoreExe | Out-Null
             }
         }
 
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 2
     }
 
-    throw "Core did not report coreInitialized within ${TimeoutSec}s (command=ready)."
+    throw "Core did not report coreInitialized within ${TimeoutSec}s (command=ready). Check Core Serilog log or auto-start log from this run."
 }
 
 function Push-CoreE2ePolicyState {
