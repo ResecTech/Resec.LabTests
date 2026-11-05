@@ -61,3 +61,14 @@ cd <Resec.LabTests>\Core
 WMC REST login defaults to **resec_admin** / **resec_admin** (same as Core `AdminUser` / `AdminPassword` on a fresh install). Override with `CORE_E2E_WMC_*` or `-WmcUser` / `-WmcPassword` when needed.
 
 Fixture: `..\Fixtures\Mail\NCP-7362\` (Jira `RDP verification.eml` — blank **From**, **To** `ben@resec.co`). Reuses the NCP-7344 no-CDR lab policy import. After debug **sanitize**, logs into WebMC REST and asserts **`POST /v1/sanitizations/email`** returns empty **mailFromAddress** and does not duplicate the recipient into **From** ([NCP-7362](https://resec.atlassian.net/browse/NCP-7362)).
+
+## NCP-7365 — policy assignment conditions (simulate + file size)
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7365-PolicyAssignmentConditions.ps1
+```
+
+Imports lab policies and one enabled assignment rule per **PolicyConditions** schema field (agent type, file/mail/user identity fields, file size operators). Exercises **`POST /v1/policies/conditions/simulate`** with positive and negative context for each field (same API WebMC **Simulation** uses). **File: Size** rules use the WebMC wire shape (`target` magnitude + `unit`, e.g. `500`/`MB`, `4`/`KB`) so [NCP-7365](https://resec.atlassian.net/browse/NCP-7365) (Core ignoring `unit`) fails until fixed. Then re-imports with **only** the **file_size > 4 KB** rule and runs debug **sanitize** (1 KiB vs 5 KiB) so agent/user rules cannot match first (`-SkipSanitizeFileSizeScenario` for simulate-only runs). If Core is not listening on port 4504, the script starts **`Resec.Core.exe`** from `RESEC_CORE_EXE_LOCATION` or `lab.local.json` (`-SkipAutoStartCore` to disable).
+
+**Cold start:** Full Core init (scanners, RabbitMQ, port 11073) often takes **1–2 minutes**. Poll **`command=ready`** until **`coreInitialized`** is true before simulate/import. Auto-started Core console output goes to temp **`CoreE2e-autostart-*.{stdout,stderr}.log`** (not the test transcript). After **`Listening for connections on port 11073`**, only periodic **MemoryGuard** lines in Serilog are normal idle behavior — not a hung startup. Confirm readiness: `Invoke-RestMethod 'https://localhost:4504/debug/hook?command=ready' -SkipCertificateCheck`.
