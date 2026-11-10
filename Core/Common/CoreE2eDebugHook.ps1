@@ -694,7 +694,8 @@ function Invoke-CoreE2eSanitizeFile {
         [int] $PolicyId,
         [string] $OutputPath = '',
         [int] $TimeoutSeconds = 300,
-        [int] $DeploymentId = 0
+        [int] $DeploymentId = 0,
+        [switch] $IncludeEmbeddedSummary
     )
 
     $fullPath = [System.IO.Path]::GetFullPath($FilePath)
@@ -715,6 +716,10 @@ function Invoke-CoreE2eSanitizeFile {
 
     if ($DeploymentId -gt 0) {
         $body.deploymentId = $DeploymentId
+    }
+
+    if ($IncludeEmbeddedSummary) {
+        $body.includeEmbeddedSummary = $true
     }
 
     $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'sanitize' -BodyObject $body -TimeoutSec ($TimeoutSeconds + 60)

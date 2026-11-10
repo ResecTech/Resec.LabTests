@@ -1,0 +1,17 @@
+{
+  "ticket": "NCP-7373",
+  "fixtureFile": "ncp7373-lab-embedded-xlsx.eml",
+  "description": "Lab EML is built at runtime when fixtureFile is missing. Optional Jira repro: 20261102125547ranen.hadar39431 (bbefe37d-88a3-45ac-913e-9ba2cfaa0583).eml",
+  "syntheticAttachmentFileName": "CHP_Report (2).xlsx",
+  "spreadsheetFixtureRelative": "..\\..\\Office\\NCP-7344\\simple.xlsx",
+  "forbiddenLogPatterns": [
+    "Failed to delete embedded file",
+    "Failed to delete embedded file .* after 120 retries"
+  ],
+  "requiredSuccessLogPattern": "Embedded attachment removed after releasing EmbeddedObjectsDetails storage lock",
+  "expectedEmbeddedOutcomeNames": [
+    "OutcomeFailTransformationTimeout",
+    "OutcomeContentRemoved"
+  ],
+  "expectedEmbeddedFileNameContains": ".xlsx"
+}

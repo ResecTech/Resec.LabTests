@@ -51,6 +51,15 @@ cd <Resec.LabTests>\Core
 
 Policy: `Policies\NCP7360-portal-encrypted-archive-block.importpolicies.json` (block archive on disallowed embedded files, sanitization report for encrypted/blocked, unknown types blocked). Enables **Portal_Enabled** via `importsystemproperties` (uses existing **Portal_Secret** for `/v1/portal` `apiToken`, or sets a lab fallback when empty). Builds an AES-encrypted zip at runtime (password **1111**, see `Fixtures\Blocked\Encrypted\NCP-7360\manifest.json`), runs debug **sanitize**, submits the password through **`/v1/portal/submit-file-data`**, and asserts **`/v1/portal/file-data`** is **Blocked**, not **Passed** — reproduces [NCP-7360](https://resec.atlassian.net/browse/NCP-7360) until Core/portal outcome bubbling is fixed.
 
+## NCP-7373 — Email embedded xlsx removal after CDR timeout (no self file-lock)
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7373-EmailEmbeddedAttachmentRemoval.ps1
+```
+
+Policy: `Policies\NCP7373-email-embedded-cdr-timeout-lab.importpolicies.json` (1s CDR budget, remove disallowed embedded files). Fixture: `..\Fixtures\Mail\NCP-7373\` — builds a multipart EML with `Office\NCP-7344\simple.xlsx` when `ncp7373-lab-embedded-xlsx.eml` is not present; drop the Jira repro EML into that folder for full parity. Requires Core with DEBUG `includeEmbeddedSummary` on sanitize and NCP-7373 lock-release logging. Asserts `embeddedObjects` outcomes, structured removal log line, and **no** `Failed to delete embedded file` warnings ([NCP-7373](https://resec.atlassian.net/browse/NCP-7373)).
+
 ## NCP-7362 — WMC From column when EML has no From
 
 ```powershell
