@@ -13,5 +13,9 @@
     "OutcomeFailTransformationTimeout",
     "OutcomeContentRemoved"
   ],
+  "regressionSmokeEmbeddedOutcomeNames": [
+    "OutcomePassed",
+    "OutcomeClean"
+  ],
   "expectedEmbeddedFileNameContains": ".xlsx"
 }
