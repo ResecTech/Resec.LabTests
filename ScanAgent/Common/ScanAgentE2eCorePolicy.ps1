@@ -21,6 +21,12 @@ function Enable-ScanAgentCoreDebugTlsBypass {
     }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  # PowerShell 6+ uses Invoke-RestMethod -SkipCertificateCheck (see Invoke-ScanAgentCoreDebugHook).
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $script:ScanAgentCoreDebugTlsBypassEnabled = $true
+        return
+    }
+
     if (-not ('ScanAgentCoreDebugTrustAllCerts' -as [type])) {
         Add-Type @"
 using System.Net;
@@ -105,8 +111,6 @@ function Invoke-ScanAgentCoreDebugHook {
         [int] $TimeoutSec = 180
     )
 
-    Enable-ScanAgentCoreDebugTlsBypass
-
     try {
         if ($BodyObject) {
             $payload = @{}
@@ -118,13 +122,36 @@ function Invoke-ScanAgentCoreDebugHook {
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
             $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
             $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
-            return Invoke-RestMethod -Uri $uri -Method Post -Body $bytes `
-                -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
+            $irmParams = @{
+                Uri         = $uri
+                Method      = 'Post'
+                Body        = $bytes
+                ContentType = 'application/json; charset=utf-8'
+                TimeoutSec  = $TimeoutSec
+            }
+            if ($PSVersionTable.PSVersion.Major -ge 6) {
+                $irmParams.SkipCertificateCheck = $true
+            }
+            else {
+                Enable-ScanAgentCoreDebugTlsBypass
+            }
+            return Invoke-RestMethod @irmParams
         }
 
         $separator = if ($HookUrl.Contains('?')) { '&' } else { '?' }
         $uri = '{0}{1}command={2}' -f $HookUrl, $separator, [uri]::EscapeDataString($Command)
-        return Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+        $irmParams = @{
+            Uri        = $uri
+            Method     = 'Get'
+            TimeoutSec = $TimeoutSec
+        }
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $irmParams.SkipCertificateCheck = $true
+        }
+        else {
+            Enable-ScanAgentCoreDebugTlsBypass
+        }
+        return Invoke-RestMethod @irmParams
     }
     catch {
         throw (ConvertTo-ScanAgentCoreDebugHookHttpErrorMessage -Command $Command -ErrorRecord $_)
@@ -450,6 +477,101 @@ function Set-Sa05PolicyRawRemainConnected {
     }
 
     return $PolicyRawData
+}
+
+function Set-Sa05PolicyRawIdleDisconnectOnInactivity {
+    <#
+      WebMC "Remain connected" disabled: NumPropType_AutoReconnect=False enables IdleDisconnectPolicy (NCP-7368).
+    #>
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    if ($PolicyRawData -match 'NumPropType_AutoReconnect=True') {
+        return [regex]::Replace($PolicyRawData, 'NumPropType_AutoReconnect=True', 'NumPropType_AutoReconnect=False')
+    }
+
+    if ($PolicyRawData -notmatch 'NumPropType_AutoReconnect=') {
+        return "NumPropType_AutoReconnect=False`r`n" + $PolicyRawData
+    }
+
+    return $PolicyRawData
+}
+
+function Wait-ScanAgentGatewayDisconnected {
+    <#
+      Waits without debug gateway traffic, then polls gateway.status until isConnected is false.
+      Debug pipe does not reset gateway idle; avoid gateway.status polling during the quiet window.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [int] $IdleQuietSec = 40,
+        [int] $VerifyTimeoutSec = 45,
+        [string] $Context = 'idle disconnect',
+        [int] $PollMs = 2000
+    )
+
+    if ($IdleQuietSec -gt 0) {
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Waiting ${IdleQuietSec}s without gateway.status poll for $Context."
+        Start-Sleep -Seconds $IdleQuietSec
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($VerifyTimeoutSec)
+    $lastLog = [DateTimeOffset]::MinValue
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
+        if ($gateway.ok -eq $true -and $gateway.isConnected -eq $false) {
+            $statusText = if ($gateway.connectionStatus) { [string]$gateway.connectionStatus } else { 'disconnected' }
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] gateway.status isConnected=false ($Context): $statusText"
+            return $gateway
+        }
+
+        $now = [DateTimeOffset]::UtcNow
+        if (($now - $lastLog).TotalSeconds -ge 10) {
+            $statusText = if ($gateway.connectionStatus) { [string]$gateway.connectionStatus } else { 'still connected' }
+            $remainingSec = [Math]::Max(0, [int]($deadline - $now).TotalSeconds)
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Waiting for gateway.status isConnected=false ($Context): $statusText (${remainingSec}s left)"
+            $lastLog = $now
+        }
+
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    throw "Timed out after idle quiet ${IdleQuietSec}s + ${VerifyTimeoutSec}s verify waiting for gateway.status isConnected=false ($Context)."
+}
+
+function Invoke-ScanAgentCoreSessionDropAndAdmissionsOn {
+    <#
+      Drops connected agent sessions (commdown) then re-enables admissions (commup) without waiting for reconnect.
+      With NumPropType_AutoReconnect=False the agent should stay disconnected until work calls EnsureConnected.
+      Use for NCP-7368-style "first sanitize while disconnected" E2E (more reliable than idle-timer waits in lab).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [int] $DisconnectVerifyTimeoutSec = 30,
+        [string] $Context = 'Core session drop'
+    )
+
+    $down = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockon'
+    Assert-ScanAgentCoreDebugHookResponse -Response $down -Step 'agentcommblockon (session drop)'
+    $dropped = if ($down.PSObject.Properties.Name -contains 'droppedSessions') { $down.droppedSessions } else { '?' }
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commdown (session drop): droppedSessions=$dropped ($Context)."
+
+    Start-Sleep -Milliseconds 500
+    $null = Wait-ScanAgentGatewayDisconnected -Exe $Exe -IdleQuietSec 0 -VerifyTimeoutSec $DisconnectVerifyTimeoutSec `
+        -Context $Context
+
+    $up = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockoff'
+    Assert-ScanAgentCoreDebugHookResponse -Response $up -Step 'agentcommblockoff (admissions on)'
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commup: admissions re-enabled; agent should remain disconnected ($Context)."
+
+    Start-Sleep -Milliseconds 300
+    $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
+    if ($gateway.ok -eq $true -and $gateway.isConnected -eq $true) {
+        throw "Expected gateway still disconnected after commdown/commup with Remain connected off ($Context); isConnected=true."
+    }
 }
 
 function Ensure-Sa05SmbLabFolders {
