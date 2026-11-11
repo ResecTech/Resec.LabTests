@@ -797,3 +797,189 @@ function Wait-DirWatcherE2eMonitoringStable {
 
     throw "Timed out waiting for stable DirWatcher monitoring ($($SettleSec)s continuous ready within $($TimeoutSec)s)."
 }
+
+function Resolve-DirWatcherE2eCurrentLogFile {
+    param([string] $DebugBaseUrl = '')
+
+    $files = @(Get-DirWatcherE2eRecentLogFiles -DebugBaseUrl $DebugBaseUrl)
+    if ($files.Count -gt 0) {
+        return $files[0].FullName
+    }
+
+    return $null
+}
+
+function Get-DirWatcherE2eLogSearchDirectories {
+    param([string] $DebugBaseUrl = '')
+
+    $dirs = New-Object 'System.Collections.Generic.List[string]'
+    if (Get-Command Get-DirWatcherE2eDebugLogPathEvidence -ErrorAction SilentlyContinue) {
+        foreach ($p in Get-DirWatcherE2eDebugLogPathEvidence -BaseUrl $DebugBaseUrl) {
+            if ([string]::IsNullOrWhiteSpace($p)) {
+                continue
+            }
+
+            if (Test-Path -LiteralPath $p -PathType Container) {
+                $dirs.Add([System.IO.Path]::GetFullPath($p)) | Out-Null
+            }
+            elseif (Test-Path -LiteralPath $p -PathType Leaf) {
+                $parent = [System.IO.Path]::GetDirectoryName($p)
+                if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                    $dirs.Add([System.IO.Path]::GetFullPath($parent)) | Out-Null
+                }
+            }
+        }
+    }
+
+    $fallback = Get-DirWatcherE2eLogDirectory
+    if (-not [string]::IsNullOrWhiteSpace($fallback)) {
+        $dirs.Add([System.IO.Path]::GetFullPath($fallback)) | Out-Null
+    }
+
+    return @($dirs | Select-Object -Unique)
+}
+
+function Get-DirWatcherE2eRecentLogFiles {
+    param(
+        [string] $DebugBaseUrl = '',
+        [DateTimeOffset] $NotBeforeUtc = [DateTimeOffset]::MinValue
+    )
+
+    $notBeforeLocal = if ($NotBeforeUtc -ne [DateTimeOffset]::MinValue) {
+        $NotBeforeUtc.ToLocalTime().DateTime.AddMinutes(-2)
+    }
+    else {
+        [datetime]::MinValue
+    }
+
+    $files = New-Object 'System.Collections.Generic.List[System.IO.FileInfo]'
+    foreach ($dir in Get-DirWatcherE2eLogSearchDirectories -DebugBaseUrl $DebugBaseUrl) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            continue
+        }
+
+        Get-ChildItem -LiteralPath $dir -Filter 'log-DirWatcher*.log' -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $NotBeforeUtc -eq [DateTimeOffset]::MinValue -or $_.LastWriteTime -ge $notBeforeLocal
+            } |
+            ForEach-Object { $files.Add($_) | Out-Null }
+    }
+
+    $seen = @{}
+    $unique = New-Object 'System.Collections.Generic.List[System.IO.FileInfo]'
+    foreach ($f in ($files | Sort-Object LastWriteTime -Descending)) {
+        $key = $f.FullName.ToUpperInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+
+        $seen[$key] = $true
+        $unique.Add($f) | Out-Null
+    }
+
+    return @($unique)
+}
+
+function Get-DirWatcherE2eMergedLogLines {
+    param(
+        [string] $DebugBaseUrl = '',
+        [DateTimeOffset] $NotBeforeUtc = [DateTimeOffset]::MinValue
+    )
+
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($file in Get-DirWatcherE2eRecentLogFiles -DebugBaseUrl $DebugBaseUrl -NotBeforeUtc $NotBeforeUtc) {
+        $lines.AddRange([string[]](Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue))
+    }
+
+    return @($lines)
+}
+
+function Test-DirWatcherE2eLogLineNotBeforeUtc {
+    param(
+        [string] $Line,
+        [DateTimeOffset] $NotBeforeUtc
+    )
+
+    if ($NotBeforeUtc -eq [DateTimeOffset]::MinValue) {
+        return $true
+    }
+
+    if ($Line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+        $loggedLocal = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
+        return $loggedLocal -ge $NotBeforeUtc.ToLocalTime().DateTime.AddSeconds(-5)
+    }
+
+    return $true
+}
+
+function Get-DirWatcherE2eLogSliceAfterMark {
+    param(
+        [string[]] $Lines,
+        [string] $LogMarkMessage
+    )
+
+    if ([string]::IsNullOrWhiteSpace($LogMarkMessage) -or $Lines.Count -eq 0) {
+        return $Lines
+    }
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $lineText = [string]$Lines[$i]
+        if ($lineText -like "*$LogMarkMessage*" -or $lineText -like "*E2E logmark:*$LogMarkMessage*") {
+            if ($i -lt ($Lines.Count - 1)) {
+                return @($Lines[($i + 1)..($Lines.Count - 1)])
+            }
+
+            return @()
+        }
+    }
+
+    return $Lines
+}
+
+function Assert-DirWatcherE2eSanitizeLogHasNoWarnings {
+    param(
+        [string] $LogMarkMessage = '',
+        [string] $FileNameHint = '',
+        [string] $DebugBaseUrl = '',
+        [DateTimeOffset] $NotBeforeUtc = [DateTimeOffset]::MinValue,
+        [int] $TimeoutSec = 5
+    )
+
+    $logFiles = @(Get-DirWatcherE2eRecentLogFiles -DebugBaseUrl $DebugBaseUrl -NotBeforeUtc $NotBeforeUtc)
+    if ($logFiles.Count -eq 0) {
+        throw 'DirWatcher log file not found for post-sanitize log assertions.'
+    }
+
+    $forbidden = @(
+        'duplicate final outcome',
+        'Error retrieving temp folder location'
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $logLabel = ($logFiles | ForEach-Object { $_.Name }) -join ', '
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $lines = @(Get-DirWatcherE2eMergedLogLines -DebugBaseUrl $DebugBaseUrl -NotBeforeUtc $NotBeforeUtc)
+        $lines = @($lines | Where-Object { Test-DirWatcherE2eLogLineNotBeforeUtc -Line $_ -NotBeforeUtc $NotBeforeUtc })
+
+        $slice = @(Get-DirWatcherE2eLogSliceAfterMark -Lines $lines -LogMarkMessage $LogMarkMessage)
+        if (-not [string]::IsNullOrWhiteSpace($FileNameHint)) {
+            $fileSlice = @($slice | Where-Object { $_ -like "*$FileNameHint*" })
+            if ($fileSlice.Count -gt 0) {
+                $slice = $fileSlice
+            }
+        }
+
+        foreach ($pattern in $forbidden) {
+            $hit = @($slice | Where-Object { $_ -like "*$pattern*" } | Select-Object -First 1)
+            if ($hit.Count -gt 0) {
+                throw "DirWatcher log contains forbidden pattern '$pattern': $($hit[0])"
+            }
+        }
+
+        Write-DwTestStep "OK - DirWatcher log has no duplicate-outcome / temp-mapper warnings ($logLabel)"
+        return
+    }
+
+    throw "Timed out after ${TimeoutSec}s scanning DirWatcher logs ($logLabel)."
+}

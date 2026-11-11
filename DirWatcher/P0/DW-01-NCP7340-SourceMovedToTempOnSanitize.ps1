@@ -8,6 +8,9 @@
   the source path within 10 seconds once processing starts (move to temp). Temp is not asserted
   (the copy is often removed within seconds after upload starts). The test then waits for clean SMB output.
 
+  Also asserts NCP-7370 hygiene: after a successful pass-through sanitize, the DirWatcher log for that
+  file must not contain duplicate-final-outcome or temp-folder-mapper warning lines.
+
   Lab setup:
     - Core with EnableDebugInterface=True (https://localhost:4504/debug/hook).
     - DirWatcher registered to Core and running (restart after policy import unless -SkipDirWatcherRestart).
@@ -183,6 +186,13 @@ try {
     $dropName = 'ncp7340-' + [Guid]::NewGuid().ToString('N') + [System.IO.Path]::GetExtension($fixtureFull)
     $dropPath = Join-Path $layout.Incoming $dropName
     $fixtureLength = (Get-Item -LiteralPath $fixtureFull).Length
+    $logMark = "DW-01 sanitize $dropName"
+    $dwDebugBaseUrl = ''
+    if (Get-Command Get-DirWatcherE2eDebugBaseUrl -ErrorAction SilentlyContinue) {
+        $dwDebugBaseUrl = Get-DirWatcherE2eDebugBaseUrl
+    }
+
+    Write-DirWatcherE2eDebugLogMark -Message $logMark -BaseUrl $dwDebugBaseUrl
 
     Write-DwTestStep "Drop fixture -> $dropPath"
     Copy-Item -LiteralPath $fixtureFull -Destination $dropPath -Force
@@ -209,6 +219,10 @@ try {
         throw "Timed out waiting for clean output '$dropName' under $($layout.Clean) ($($CleanOutputTimeoutSec)s)."
     }
     Write-DwTestStep "OK - clean output: $outputPath"
+
+    Write-DwTestStep 'Assert DirWatcher log has no duplicate-outcome or temp-mapper warnings (NCP-7370)'
+    Assert-DirWatcherE2eSanitizeLogHasNoWarnings -LogMarkMessage $logMark -FileNameHint $dropName `
+        -DebugBaseUrl $dwDebugBaseUrl -NotBeforeUtc $script:TestStartedAtUtc
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
