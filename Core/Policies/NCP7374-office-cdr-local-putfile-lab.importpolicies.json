@@ -1,0 +1,12 @@
+{
+  "policies": [
+    {
+      "displayName": "NCP-7374 Office CDR + Local:: putfile repro (debug sanitize)",
+      "isPredefined": false,
+      "agentType": "General",
+      "name": "NCP7374-office-cdr-local-putfile-lab",
+      "id": 93741
+    }
+  ],
+  "policyAssociations": []
+}

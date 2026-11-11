@@ -727,6 +727,75 @@ function Invoke-CoreE2eSanitizeFile {
     return $response
 }
 
+function Invoke-CoreE2eSanitizeCrossCluster {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $FilePath,
+        [Parameter(Mandatory)]
+        [int] $PolicyId,
+        [string] $CrossClusterMode = 'inprocess',
+        [bool] $ForceRemoteWorker = $true,
+        [string] $OutputPath = '',
+        [string] $DestinationName = '',
+        [bool] $ReproNcp7374CrossPortalPutFile = $false,
+        [string] $PortalServerOverride = '',
+        [int] $TimeoutSeconds = 300,
+        [int] $DeploymentId = 0,
+        [switch] $IncludeEmbeddedSummary
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($FilePath)
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "Sanitize cross-cluster input not found: $fullPath"
+    }
+
+    $mode = if ([string]::IsNullOrWhiteSpace($CrossClusterMode)) { 'inprocess' } else { $CrossClusterMode.Trim().ToLowerInvariant() }
+    if ($mode -notin @('inprocess', 'rabbit')) {
+        throw "CrossClusterMode must be 'inprocess' or 'rabbit', not '$CrossClusterMode'."
+    }
+
+    $body = [ordered]@{
+        command            = 'sanitizecrosscluster'
+        filePath           = $fullPath
+        policyId           = $PolicyId
+        crossClusterMode   = $mode
+        forceRemoteWorker  = $ForceRemoteWorker
+        timeoutSeconds     = $TimeoutSeconds
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+        $body.outputPath = [System.IO.Path]::GetFullPath($OutputPath)
+    }
+
+    if ($DeploymentId -gt 0) {
+        $body.deploymentId = $DeploymentId
+    }
+
+    if ($IncludeEmbeddedSummary) {
+        $body.includeEmbeddedSummary = $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DestinationName)) {
+        $body.destinationName = $DestinationName.Trim()
+    }
+
+    if ($ReproNcp7374CrossPortalPutFile) {
+        $body.reproNcp7374CrossPortalPutFile = $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PortalServerOverride)) {
+        $body.portalServerOverride = $PortalServerOverride.Trim()
+    }
+
+    $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'sanitizecrosscluster' -BodyObject $body `
+        -TimeoutSec ($TimeoutSeconds + 60)
+    Assert-CoreE2eDebugHookResponse -Response $response `
+        -Step "sanitizecrosscluster ($([System.IO.Path]::GetFileName($fullPath)))"
+    return $response
+}
+
 function Get-CoreE2eDebugLogPathEvidence {
     param(
         [Parameter(Mandatory)]

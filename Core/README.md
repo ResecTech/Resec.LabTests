@@ -51,6 +51,24 @@ cd <Resec.LabTests>\Core
 
 Policy: `Policies\NCP7360-portal-encrypted-archive-block.importpolicies.json` (block archive on disallowed embedded files, sanitization report for encrypted/blocked, unknown types blocked). Enables **Portal_Enabled** via `importsystemproperties` (uses existing **Portal_Secret** for `/v1/portal` `apiToken`, or sets a lab fallback when empty). Builds an AES-encrypted zip at runtime (password **1111**, see `Fixtures\Blocked\Encrypted\NCP-7360\manifest.json`), runs debug **sanitize**, submits the password through **`/v1/portal/submit-file-data`**, and asserts **`/v1/portal/file-data`** is **Blocked**, not **Passed** — reproduces [NCP-7360](https://resec.atlassian.net/browse/NCP-7360) until Core/portal outcome bubbling is fixed.
 
+## NCP-7374 — Cross-cluster temp file (`sanitizecrosscluster`)
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7374-CrossClusterSanitize.ps1
+```
+
+Exercises DEBUG **`sanitizecrosscluster`** with **`crossClusterMode=inprocess`** (portal enqueue + worker leg on one Core). Fixtures: `..\Fixtures\CrossCluster\NCP-7374\` (reuses `Office\NCP-7344\` Office files via manifest `relativeSource`). Policy: same **`NCP7344-office-nocdr-lab`** importpolicies JSON. Asserts **`processingServer`** and **`crossClusterQueueName`** (`DEBUG-crosscluster-inprocess`), and **forbids** `Temp\*.x already exists` / matching IOException lines in outcome and Serilog ([NCP-7374](https://resec.atlassian.net/browse/NCP-7374)). Use **`-ParallelStress`** for repeated runs; copy Jira repro files into the fixture folder for optional QA parity; **`-CrossClusterMode rabbit`** needs MQ and a second Core.
+
+## NCP-7374 — Cross-portal PutFile repro (`ExistingFile` / temp `-N.x`)
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7374-CrossPortalPutFileRepro.ps1
+```
+
+Targets the ticket failure path: **CDR worker output** + **`Local::`** store + synthetic **`portalServerOverride`** (DEBUG `reproNcp7374CrossPortalPutFile`) → Rabbit **`SendPutFileRequest`** → **`ExistingFile.GetExternalPathToFile`**. Policy: **`NCP7374-office-cdr-local-putfile-lab`** (`Common\CoreE2eNcp7374PutfilePolicy.ps1`). Manifest: `..\Fixtures\CrossCluster\NCP-7374\putfile-repro-manifest.json`. Default expects **repro signals** on unpatched Core; after the fix, run **`.\NCP7374-CrossPortalPutFileRepro.ps1 -AssertBugFixed`**. `sanitizecrosscluster` defaults **`simulateMqPutFileSuccess: true`** so PutFile does not wait ~5 minutes for a missing portal consumer (pass **`simulateMqPutFileSuccess: false`** on the hook body to exercise real MQ timeout).
+
 ## NCP-7373 — Email embedded xlsx removal after CDR timeout (no self file-lock)
 
 ```powershell

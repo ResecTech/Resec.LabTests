@@ -1,0 +1,19 @@
+{
+  "description": "NCP-7374 — cross-portal Local:: PutFile + CDR worker output + ExistingFile.GetExternalPathToFile (portalServerOverride lab hook).",
+  "jiraUrl": "https://resec.atlassian.net/browse/NCP-7374",
+  "defaultCrossClusterMode": "inprocess",
+  "destinationName": "Local::",
+  "reproSignalPatterns": [
+    "Temp\\\\.*\\.x.*already exists",
+    "IOException.*already exists",
+    "Copying temp file.*CdrWorker",
+    "OutcomeFailSaveAccessToDestinationDenied"
+  ],
+  "fixtures": [
+    {
+      "id": "simple-xlsx-cdr",
+      "relativeSource": "..\\..\\Office\\NCP-7344\\simple.xlsx",
+      "note": "Spreadsheet CDR enabled; repro expects temp -N.x collision on unpatched builds."
+    }
+  ]
+}

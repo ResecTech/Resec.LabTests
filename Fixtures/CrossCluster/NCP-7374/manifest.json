@@ -1,0 +1,55 @@
+{
+  "description": "NCP-7374 — cross-cluster sanitization must not fail with Temp\\-{id}.x already exists (lab uses sanitizecrosscluster inprocess worker leg).",
+  "jiraUrl": "https://resec.atlassian.net/browse/NCP-7374",
+  "defaultCrossClusterMode": "inprocess",
+  "forbiddenOutcomeDetailsPatterns": [
+    "Temp\\\\.*\\.x.*already exists",
+    "' already exists\\."
+  ],
+  "forbiddenLogPatterns": [
+    "Temp\\\\.*\\.x.*already exists",
+    "IOException.*already exists"
+  ],
+  "requiredCrossClusterQueuePrefix": "DEBUG-crosscluster",
+  "fixtures": [
+    {
+      "id": "links-docx",
+      "relativeSource": "..\\..\\Office\\NCP-7344\\links.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ]
+    },
+    {
+      "id": "simple-docx",
+      "relativeSource": "..\\..\\Office\\NCP-7344\\simple.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ]
+    },
+    {
+      "id": "simple-xlsx",
+      "relativeSource": "..\\..\\Office\\NCP-7344\\simple.xlsx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ]
+    }
+  ],
+  "optionalFixtures": [
+    {
+      "id": "links-ppt",
+      "file": "links.ppt",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ],
+      "note": "Copy QA repro PPT into this fixture folder when available."
+    },
+    {
+      "id": "docx-dde",
+      "file": "docx with DDE actions.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ],
+      "note": "Copy QA repro DDE docx into this fixture folder when available."
+    },
+    {
+      "id": "canary-docx",
+      "file": "^CanaryTokens.docx",
+      "expectedOutcomes": [ "OutcomePassed", "OutcomeClean", "OutcomePartiallyProcessed" ],
+      "note": "Copy CanaryTokens docx from QA into this fixture folder when available."
+    }
+  ],
+  "parallelStress": {
+    "fileRelativeSource": "..\\..\\Office\\NCP-7344\\links.docx",
+    "runCount": 3
+  }
+}
