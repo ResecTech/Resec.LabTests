@@ -27,6 +27,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\DirWatcher\P0\DW-03-NCP7345-DeleteProcessedFolderWithFile.ps1
    .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1
    .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1 -RejectedBehavior 1
+   .\DirWatcher\P0\DW-05-NCP7376-SameFileTwiceFromIncomingRoot.ps1
    ```
 
 ## Layout
@@ -41,7 +42,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `Mail/` | Mail Agent E2E scripts and headless SMTP config (`Mail/Config`) |
 | `Tools/SimpleMailServer/` | Lab SMTP capture utility (`--cli`) for Mail and Core E2E |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
-| `DirWatcher/` | Directory Watcher E2E (NCP-7340, NCP-7343, NCP-7345, NCP-7361 rejected save) |
+| `DirWatcher/` | Directory Watcher E2E (NCP-7340, NCP-7343, NCP-7345, NCP-7361 rejected save, NCP-7376 same-file re-drop) |
 | `docs/` | Authoring guide for new E2E scripts — [E2E-Test-Authoring.md](docs/E2E-Test-Authoring.md) |
 
 ## Configuration

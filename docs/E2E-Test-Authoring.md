@@ -167,7 +167,7 @@ Reference: `Core/NCP7362-WmcEmptyFromAddress.ps1` and `Core/README.md` (NCP-7362
 | 3 | Core | `Core/NCP7360-PortalBlockedArchiveStatus.ps1` | Portal REST + debug hook, runtime fixture, version reporting |
 | 4 | Core | `Core/NCP7362-WmcEmptyFromAddress.ps1` | WMC REST login + `/v1/sanitizations/email`, checked-in EML fixture |
 | 5 | Scan Agent | `ScanAgent/Common/README.md` | Bootstrap, reporting, destination folders, Core policy helpers |
-| 6 | DirWatcher | `DirWatcher/P0/DW-01-…`, `DW-04-NCP7361-…` | Agent debug hook, Core policy, rejected-folder assert; DW-04 uses fixed 5s/2s waits (ignore runner timeout params); run `-RejectedBehavior 1` for reason subfolder |
+| 6 | DirWatcher | `DirWatcher/P0/DW-01-…`, `DW-04-NCP7361-…`, `DW-05-NCP7376-…` | Agent debug hook, Core policy, rejected-folder assert; DW-04 uses fixed 5s/2s waits (ignore runner timeout params); run `-RejectedBehavior 1` for reason subfolder; DW-05 same incoming file twice (log outcomes via pass-1 logmark) |
 
 ## Pre-merge self-check
 

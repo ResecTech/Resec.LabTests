@@ -290,6 +290,135 @@ function Test-DirWatcherE2eDebugMonitoringIncoming {
     return $false
 }
 
+function Get-DirWatcherE2eTrackingState {
+    param(
+        [string] $Path = '',
+        [string] $BaseUrl = ''
+    )
+
+    $r = Invoke-DirWatcherE2eDebugHook -Command 'tracking.state' -Message $Path -BaseUrl $BaseUrl
+    return $r.tracking
+}
+
+function Get-DirWatcherE2eTrackingProperty {
+    param(
+        $Tracking,
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    if ($null -eq $Tracking) {
+        return $null
+    }
+
+    foreach ($candidate in @($Name, ($Name.Substring(0, 1).ToUpperInvariant() + $Name.Substring(1)))) {
+        $prop = $Tracking.PSObject.Properties[$candidate]
+        if ($null -ne $prop) {
+            return $prop.Value
+        }
+    }
+
+    foreach ($prop in $Tracking.PSObject.Properties) {
+        if ($prop.Name -ieq $Name) {
+            return $prop.Value
+        }
+    }
+
+    return $null
+}
+
+function Test-DirWatcherE2eTrackingBool {
+    param(
+        $Tracking,
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    $raw = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name $Name
+    if ($null -eq $raw) {
+        return $false
+    }
+
+    if ($raw -is [bool]) {
+        return $raw
+    }
+
+    switch ([string]$raw) {
+        { $_ -match '^(?i:true|1)$' } { return $true }
+        { $_ -match '^(?i:false|0)$' } { return $false }
+    }
+
+    return $false
+}
+
+function Test-DirWatcherE2eIncomingTrackingIdle {
+    param(
+        [Parameter(Mandatory)]
+        $Tracking,
+        [switch] $RequireMapperIdle
+    )
+
+    if ($null -eq $Tracking) {
+        return $false
+    }
+
+    foreach ($flag in @(
+            'queriedPathProcessedFileTracked',
+            'queriedPathInFlight',
+            'queriedPathCompletedOutput',
+            'queriedPathCoreDestWriteInProgress'
+        )) {
+        if (Test-DirWatcherE2eTrackingBool -Tracking $Tracking -Name $flag) {
+            return $false
+        }
+    }
+
+    if ($RequireMapperIdle) {
+        foreach ($counter in @(
+                'finalOutcomeSideEffectsAppliedCount',
+                'tempFolderToOriginalPathMapperCount',
+                'autoReleasedSlotsCount',
+                'slotAcquiredAtCount'
+            )) {
+            $val = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name $counter
+            if ($null -ne $val -and [int]$val -gt 0) {
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
+function Wait-DirWatcherE2eIncomingTrackingCleared {
+    param(
+        [Parameter(Mandatory)]
+        [string] $IncomingPath,
+        [string] $DebugBaseUrl = '',
+        [int] $TimeoutSec = 15,
+        [switch] $RequireMapperIdle
+    )
+
+    $incomingFull = Normalize-DirWatcherE2ePathKey -Path $IncomingPath
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $last = $null
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $last = Get-DirWatcherE2eTrackingState -Path $incomingFull -BaseUrl $DebugBaseUrl
+        if (Test-DirWatcherE2eIncomingTrackingIdle -Tracking $last -RequireMapperIdle:$RequireMapperIdle) {
+            Write-DwTestStep "OK - tracking.state clear for incoming '$incomingFull' (processed/in-flight/completed-output)"
+            return $last
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    $detail = if ($null -eq $last) { '(no tracking.state response)' } else {
+        "processed=$($last.processedFileCount) inFlight=$($last.inFlightSourceCount) completed=$($last.completedOutputCount) mapper=$($last.tempFolderToOriginalPathMapperCount) outcomeDedupe=$($last.finalOutcomeSideEffectsAppliedCount)"
+    }
+    throw "Timed out after ${TimeoutSec}s waiting for tracking.state to clear incoming path '$incomingFull'. Last: $detail"
+}
+
 function Write-DirWatcherE2eDebugLogMark {
     param(
         [Parameter(Mandatory)]
