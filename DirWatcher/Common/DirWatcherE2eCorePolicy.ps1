@@ -19,6 +19,10 @@ $script:DwNcp7361LabPolicyName = 'NCP7361-dw-rejected-save-lab'
 $script:DwNcp7361LabPolicyPlaceholderId = 9361
 $script:DwNcp7361DefaultAssignmentRuleName = 'debug-dir-watcher-ncp7361'
 
+$script:DwNcp7377LabPolicyName = 'NCP7377-dw-periodic-stop-regex-lab'
+$script:DwNcp7377LabPolicyPlaceholderId = 9377
+$script:DwNcp7377DefaultAssignmentRuleName = 'debug-dir-watcher-ncp7377'
+
 function New-DwNcp7340DirectoryWatcherFacetBlock {
     param(
         [Parameter(Mandatory)]
@@ -33,6 +37,9 @@ function New-DwNcp7340DirectoryWatcherFacetBlock {
         [int] $DeleteProcessedFoldersAfterMinutes = 0,
         [bool] $EnablePeriodicFileCheck = $false,
         [bool] $ProcessPreExistingFiles = $false,
+        [string] $PeriodicFileCheckStopRegex = '',
+        [string] $IncludeFolderMask = '',
+        [string] $ExcludeFolderMask = '',
         [ValidateSet(0, 1, 2)]
         [int] $RejectedBehavior = 1
     )
@@ -51,8 +58,9 @@ ListPropType_DirectoryWatcherFileStoreName=$DestinationStoreName
 IntPropType_DirectoryWatcherRejectedBehavior=$RejectedBehavior
 ListPropType_DirectoryWatcherRejectedFolder=$rejected
 ListPropType_DirectoryWatcherTempFolder=$temp
-ListPropType_DirectoryWatcherIncludeFolderMask=
-ListPropType_DirectoryWatcherExcludeFolderMask=
+ListPropType_DirectoryWatcherIncludeFolderMask=$IncludeFolderMask
+ListPropType_DirectoryWatcherExcludeFolderMask=$ExcludeFolderMask
+StrPropType_DirectoryWatcherPeriodicFileCheckRegex=$PeriodicFileCheckStopRegex
 NumPropType_DirectoryWatcherProcessPreExistingFiles=$processPreExistingFilesValue
 NumPropType_DirectoryWatcherProcessPreExistingTempFiles=0
 NumPropType_DirectoryWatcherIgnoreEmptyFiles=1
@@ -333,5 +341,92 @@ function Import-DwNcp7361LabPolicy {
     $body = New-DwNcp7361CorePolicyImportBody `
         -IncomingRoot $IncomingRoot -TempRoot $TempRoot -RejectedRoot $RejectedRoot -CleanRoot $CleanRoot `
         -RejectedBehavior $RejectedBehavior -PolicyName $PolicyName
+    return Import-CoreE2ePolicies -HookUrl $HookUrl -ImportBody $body
+}
+
+function New-DwNcp7377CorePolicyImportBody {
+    param(
+        [Parameter(Mandatory)]
+        [string] $IncomingRoot,
+        [Parameter(Mandatory)]
+        [string] $TempRoot,
+        [Parameter(Mandatory)]
+        [string] $RejectedRoot,
+        [Parameter(Mandatory)]
+        [string] $CleanRoot,
+        [string] $PeriodicFileCheckStopRegex = '.*\stop',
+        [string] $PolicyName = '',
+        [string] $DestinationStoreName = 'dw7377-out',
+        [string] $AssignmentRuleName = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PolicyName)) {
+        $PolicyName = $script:DwNcp7377LabPolicyName
+    }
+    if ([string]::IsNullOrWhiteSpace($AssignmentRuleName)) {
+        $AssignmentRuleName = $script:DwNcp7377DefaultAssignmentRuleName
+    }
+
+    $baseRaw = Get-Ncp7344OfficeNoCdrLabPolicyRawData
+    $dwRaw = New-DwNcp7340DirectoryWatcherFacetBlock `
+        -IncomingRoot $IncomingRoot -TempRoot $TempRoot -RejectedRoot $RejectedRoot `
+        -DestinationStoreName $DestinationStoreName `
+        -ProcessPreExistingFiles:$false `
+        -EnablePeriodicFileCheck:$true `
+        -PeriodicFileCheckStopRegex $PeriodicFileCheckStopRegex
+    $destRaw = New-Sa05SmbDestinationFacet -StoreName $DestinationStoreName -RootFolder $CleanRoot -SortOrder 2
+    $policyRaw = $baseRaw + $dwRaw + $destRaw
+
+    $policyId = $script:DwNcp7377LabPolicyPlaceholderId
+
+    return [ordered]@{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id            = $policyId
+                name          = $PolicyName
+                displayName   = "NCP-7377 DirWatcher periodic stop regex ($IncomingRoot -> $CleanRoot)"
+                agentType     = 'General'
+                isPredefined  = $false
+                policyRawData = $policyRaw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'dir_watcher'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Import-DwNcp7377LabPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $IncomingRoot,
+        [Parameter(Mandatory)]
+        [string] $TempRoot,
+        [Parameter(Mandatory)]
+        [string] $RejectedRoot,
+        [Parameter(Mandatory)]
+        [string] $CleanRoot,
+        [string] $PeriodicFileCheckStopRegex = '.*\stop',
+        [string] $PolicyName = ''
+    )
+
+    $body = New-DwNcp7377CorePolicyImportBody `
+        -IncomingRoot $IncomingRoot -TempRoot $TempRoot -RejectedRoot $RejectedRoot -CleanRoot $CleanRoot `
+        -PeriodicFileCheckStopRegex $PeriodicFileCheckStopRegex -PolicyName $PolicyName
     return Import-CoreE2ePolicies -HookUrl $HookUrl -ImportBody $body
 }

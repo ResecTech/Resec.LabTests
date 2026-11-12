@@ -20,6 +20,7 @@ PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `
 | 3 | `P0\DW-03-NCP7345-DeleteProcessedFolderWithFile.ps1` | NCP-7345 — folder **with a file** under incoming; file sanitizes and leaves source; empty subfolder removed by **Delete processed folders after X minutes** + periodic file check (default X=1, same wait slack as DW-02). |
 | 4 | `P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1` | NCP-7361 - policy-blocked unknown fixture (`Fixtures\Blocked\NCP-7361\unknown-blocked.dat`) must land under **Rejected Folder** for behavior **0** (single folder) or **1** (by reason). Run behavior **1** explicitly: `-RejectedBehavior 1`. Script uses fixed 5s rejected / 2s clean waits (ignores Lab Test Runner timeout overrides). |
 | 5 | `P0\DW-05-NCP7376-SameFileTwiceFromIncomingRoot.ps1` | NCP-7376 — after first pass reaches clean SMB output, copying the **same file** to the **incoming root** again must be picked up (source clears; second sanitize outcome). |
+| 6 | `P0\DW-06-NCP7377-PeriodicFileCheckStopRegex.ps1` | NCP-7377 — periodic file check with **Process pre-existing files** off and **Periodic File Check Stop Regex** `.*\stop`; files under `stop` folders must not sanitize; files under a normal folder must still reach clean output. |
 
 Example:
 
