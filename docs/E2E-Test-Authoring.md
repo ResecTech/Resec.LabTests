@@ -1,6 +1,6 @@
 # Lab E2E test authoring
 
-Checklist and conventions for new PowerShell E2E scripts in **Resec.LabTests**. Use this when adding a ticket repro, a regression guard, or extending an existing suite (Core, Scan Agent, Mail, DirWatcher, FileTypeDetection).
+Checklist and conventions for new PowerShell E2E scripts in **Resec.LabTests**. Use this when adding a ticket repro, a regression guard, or extending an existing suite (Core, Scan Agent, Mail, DirWatcher, FileTypeDetection, Rest API).
 
 Scripts run against **real lab deployments** and optionally post to the [Test Platform](https://github.com/ResecTech/TestPlatform) HTTP API. They are not unit tests: keep them focused on user-visible or integration behavior the ticket describes.
 

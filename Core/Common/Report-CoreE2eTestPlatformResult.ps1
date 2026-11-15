@@ -68,6 +68,9 @@ function Get-ScanAgentTestPlatformReportConfig {
     if ([string]::IsNullOrWhiteSpace($version)) {
         $version = $env:DIRWATCHER_COMPONENT_VERSION
     }
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        $version = $env:RESTAPI_COMPONENT_VERSION
+    }
 
     return @{
         BaseUrl         = $baseUrl.TrimEnd('/')
@@ -298,6 +301,13 @@ function Complete-ScanAgentE2eTest {
     }
     if (Get-Command -Name 'Ensure-DirWatcherE2eComponentVersionRegistered' -ErrorAction SilentlyContinue) {
         $null = Ensure-DirWatcherE2eComponentVersionRegistered
+        $config = Get-ScanAgentTestPlatformReportConfig
+        if (-not $config) {
+            return
+        }
+    }
+    if (Get-Command -Name 'Ensure-RestApiE2eComponentVersionRegistered' -ErrorAction SilentlyContinue) {
+        $null = Ensure-RestApiE2eComponentVersionRegistered
         $config = Get-ScanAgentTestPlatformReportConfig
         if (-not $config) {
             return

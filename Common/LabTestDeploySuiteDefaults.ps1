@@ -79,3 +79,12 @@ function Get-DirWatcherDeployRequirements {
         }
     )
 }
+
+function Get-RestApiDeployRequirements {
+    return @(
+        [PSCustomObject]@{
+            DeployScriptId  = 'RestApi'
+            RequiresRunning = $false
+        }
+    )
+}
