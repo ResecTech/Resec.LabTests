@@ -86,7 +86,8 @@ function New-DwNcp7340CorePolicyImportBody {
         [string] $CleanRoot,
         [string] $PolicyName = '',
         [string] $DestinationStoreName = 'dw7340-out',
-        [string] $AssignmentRuleName = ''
+        [string] $AssignmentRuleName = '',
+        [bool] $ProcessPreExistingFiles = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($PolicyName)) {
@@ -99,7 +100,7 @@ function New-DwNcp7340CorePolicyImportBody {
     $baseRaw = Get-Ncp7344OfficeNoCdrLabPolicyRawData
     $dwRaw = New-DwNcp7340DirectoryWatcherFacetBlock `
         -IncomingRoot $IncomingRoot -TempRoot $TempRoot -RejectedRoot $RejectedRoot `
-        -DestinationStoreName $DestinationStoreName
+        -DestinationStoreName $DestinationStoreName -ProcessPreExistingFiles:$ProcessPreExistingFiles
     $destRaw = New-Sa05SmbDestinationFacet -StoreName $DestinationStoreName -RootFolder $CleanRoot -SortOrder 2
     $policyRaw = $baseRaw + $dwRaw + $destRaw
 
@@ -147,12 +148,13 @@ function Import-DwNcp7340LabPolicy {
         [string] $RejectedRoot,
         [Parameter(Mandatory)]
         [string] $CleanRoot,
-        [string] $PolicyName = ''
+        [string] $PolicyName = '',
+        [bool] $ProcessPreExistingFiles = $false
     )
 
     $body = New-DwNcp7340CorePolicyImportBody `
         -IncomingRoot $IncomingRoot -TempRoot $TempRoot -RejectedRoot $RejectedRoot -CleanRoot $CleanRoot `
-        -PolicyName $PolicyName
+        -PolicyName $PolicyName -ProcessPreExistingFiles:$ProcessPreExistingFiles
     return Import-CoreE2ePolicies -HookUrl $HookUrl -ImportBody $body
 }
 

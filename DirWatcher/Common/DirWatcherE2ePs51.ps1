@@ -330,6 +330,72 @@ function Wait-DirWatcherE2eFileLeavesPath {
     return $false
 }
 
+function Get-DirWatcherE2eTempFiles {
+    param(
+        [Parameter(Mandatory)]
+        [string] $TempRoot
+    )
+
+    $tempFull = [System.IO.Path]::GetFullPath($TempRoot)
+    if (-not (Test-Path -LiteralPath $tempFull -PathType Container)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $tempFull -File -Recurse -Force -ErrorAction SilentlyContinue)
+}
+
+function Wait-DirWatcherE2eTempFolderEmpty {
+    param(
+        [Parameter(Mandatory)]
+        [string] $TempRoot,
+        [int] $TimeoutSec = 120,
+        [int] $PollMs = 500
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $files = @(Get-DirWatcherE2eTempFiles -TempRoot $TempRoot)
+        if ($files.Count -eq 0) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $false
+}
+
+function Wait-DirWatcherE2eSanitizeOutcomeLog {
+    param(
+        [Parameter(Mandatory)]
+        [string] $FileNameHint,
+        [string] $DebugBaseUrl = '',
+        [DateTimeOffset] $NotBeforeUtc = [DateTimeOffset]::MinValue,
+        [string] $LogMarkMessage = '',
+        [int] $TimeoutSec = 120,
+        [int] $PollMs = 500
+    )
+
+    $pattern = "*HandleScannedFile: File *$FileNameHint*outcome:*"
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $dwLines = @(Get-DirWatcherE2eMergedLogLines -DebugBaseUrl $DebugBaseUrl -NotBeforeUtc $NotBeforeUtc)
+        if (-not [string]::IsNullOrWhiteSpace($LogMarkMessage)) {
+            $dwLines = @(Get-DirWatcherE2eLogSliceAfterMark -Lines $dwLines -LogMarkMessage $LogMarkMessage)
+        }
+
+        $hit = @($dwLines | Where-Object {
+                $_ -like $pattern -and $_ -notlike '*duplicate final outcome*'
+            })
+        if ($hit.Count -ge 1) {
+            return $true
+        }
+
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $false
+}
+
 function Wait-DirWatcherE2eTempContainsCopy {
     param(
         [Parameter(Mandatory)]
