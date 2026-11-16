@@ -17,6 +17,10 @@
   (random MinJobFiles–MaxJobFiles files from anywhere under SA-TestFiles: any subfolder and file type).
   Use -SkipSanitization for connect/load only. Optional -MaxFolderDepth limits nesting (0 = no limit).
 
+  Default Core setup (unless -SkipCorePolicySetup): GET pushpolicystate, POST importpolicies (lab policy
+  **Test1-connect** with Local Source/Destination and scan_agent rule), GET commdown (5s) commup — before
+  Scan Agent cold start — then GET poppolicystate in finally. Core EnableDebugInterface required.
+
   Prerequisites:
     - DebugInterface.Enabled = true in agent appsettings.
     - Folder named SA-TestFiles on drive C:\ (optional -TestFilesRoot / -SourceFolder).
@@ -33,6 +37,12 @@ param(
     [string] $ScanAgentExe = '',
     [switch] $SkipAgentRestart,
     [switch] $SkipSanitization,
+    [switch] $SkipCorePolicySetup,
+    [string] $CoreDebugHookUrl = '',
+    [string] $PolicyBaseRaw = '',
+    [string] $PolicyTemplateXml = '',
+    [string] $TemplatePolicyName = '',
+    [string] $CorePolicyName = 'Test1-connect',
     [string] $SourceFolder = '',
     [string] $TestFilesRoot = '',
     [int] $AgentStartupTimeoutSec = 300,
@@ -49,7 +59,7 @@ $ErrorActionPreference = 'Stop'
 
 function Get-LabTestDeployRequirements {
     Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
-    return Get-ScanAgentDeployRequirements
+    return (Get-ScanAgentDeployRequirements) + (Get-CoreDeployRequirements)
 }
 
 $script:ScenarioPassed = $false
@@ -60,9 +70,12 @@ $script:SaE2eCommonRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common'
 $script:SaE2eReportScript = Join-Path $script:SaE2eCommonRoot 'Report-ScanAgentTestPlatformResult.ps1'
 . (Join-Path $script:SaE2eCommonRoot 'ScanAgentE2eBootstrap.ps1') -CallingScriptRoot $PSScriptRoot `
     -ScanAgentDebug $ScanAgentDebug -ScanAgentExe $ScanAgentExe
+$ScanAgentExe = $script:SaE2eScanAgentExe
 $script:TestFileMaxBytes = 5MB
 
 $destinationPath = $null
+$script:Sa01CorePolicyStackPushed = $false
+$script:Sa01CoreDebugHookUrl = $null
 
 function Write-TestStep {
     param([string] $Message)
@@ -354,7 +367,8 @@ function Wait-ScanAgentDebugPipeReady {
     param(
         [string] $DebugExe,
         [int] $TimeoutSec,
-        [int] $WaitUiMs
+        [int] $WaitUiMs,
+        [switch] $CorePolicyLoaded
     )
     Write-TestStep "Scan Agent UI is up; wait for debug pipe (ping, gateway, waitReady), timeout ${TimeoutSec}s"
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
@@ -365,24 +379,35 @@ function Wait-ScanAgentDebugPipeReady {
             if ($ping.message -and $ping.message -ne 'pong') {
                 throw "Unexpected ping during startup: $($ping.message)"
             }
-            $gateway = Invoke-ScanAgentDebugJson -Exe $DebugExe -Arguments @('gateway.status')
-            Assert-OkResponse -Response $gateway -Step 'gateway.status (startup wait)'
-            if ($gateway.isConnected -ne $true) {
-                throw "gateway.status not connected during startup (status=$($gateway.connectionStatus))."
-            }
-            $ready = Invoke-ScanAgentDebug -Exe $DebugExe -Arguments @('waitReady', '--wait-ms', "$WaitUiMs", '--wait-loaded')
-            if ($ready.ExitCode -ne 0) {
-                throw "waitReady failed during startup (exit $($ready.ExitCode)): $($ready.StdOut)"
-            }
-            Write-TestStep 'Debug pipe ready (ping, gateway connected, waitReady OK)'
-            return
+            break
         }
         catch {
-            Write-TestStep "Debug pipe wait: $($_.Exception.Message)"
+            Write-TestStep "Debug pipe wait (ping): $($_.Exception.Message)"
+            Start-Sleep -Seconds 2
         }
-        Start-Sleep -Seconds 3
     }
-    throw "ScanAgentDebug did not become ready within ${TimeoutSec}s (UI window was already up)."
+
+    if ([datetime]::UtcNow -ge $deadline) {
+        throw "ScanAgentDebug ping did not succeed within ${TimeoutSec}s (UI window was already up)."
+    }
+
+    $remainingSec = [Math]::Max(30, [int]($deadline - [datetime]::UtcNow).TotalSeconds)
+    $gatewayContext = if ($CorePolicyLoaded) { 'after Core lab policy import' } else { 'SkipCorePolicySetup or legacy run' }
+    if (-not $CorePolicyLoaded) {
+        Write-TestStep @"
+Gateway wait without Core lab policy: agent often stays Disconnected until Core pushpolicystate/importpolicies runs (bundle 2026.11.16.7+).
+If this loops, refresh Resec.LabTests scripts and ensure Core debug hooks are enabled.
+"@
+    }
+
+    $null = Wait-ScanAgentGatewayConnected -Exe $DebugExe -TimeoutSec $remainingSec `
+        -Context "SA-01 cold start ($gatewayContext)" -NudgeReconnect
+
+    $ready = Invoke-ScanAgentDebug -Exe $DebugExe -Arguments @('waitReady', '--wait-ms', "$WaitUiMs", '--wait-loaded')
+    if ($ready.ExitCode -ne 0) {
+        throw "waitReady failed during startup (exit $($ready.ExitCode)): $($ready.StdOut)"
+    }
+    Write-TestStep 'Debug pipe ready (ping, gateway connected, waitReady OK)'
 }
 
 function Invoke-ScanAgentFirstAndSecondActivation {
@@ -727,6 +752,22 @@ try {
         throw "Scan Agent executable not found: $agentFull"
     }
 
+    if (-not $SkipCorePolicySetup) {
+        Write-TestStep 'Core: pushpolicystate + importpolicies (before Scan Agent start)'
+        $coreSetup = Initialize-ScanAgentSa01CoreLabPolicyBeforeAgent -CoreDebugHookUrl $CoreDebugHookUrl `
+            -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+            -PolicyName $CorePolicyName
+        $script:Sa01CorePolicyStackPushed = $true
+        $script:Sa01CoreDebugHookUrl = $coreSetup.HookUrl
+        $depth = if ($coreSetup.PushResponse.PSObject.Properties.Name -contains 'policyStateStackDepth') {
+            $coreSetup.PushResponse.policyStateStackDepth
+        } else { '?' }
+        Write-TestStep "Core policy ready: $CorePolicyName (policyStateStackDepth=$depth; base='$($coreSetup.PolicyBaseSource)')"
+    }
+    else {
+        Write-TestStep 'SkipCorePolicySetup: assuming Core already exposes a valid scan_agent policy with local C: roots.'
+    }
+
     if (-not $SkipAgentRestart) {
         Stop-ScanAgentProcesses -AgentExePath $ScanAgentExe
         Start-Sleep -Seconds 2
@@ -742,7 +783,9 @@ try {
 
     $exe = Resolve-ScanAgentDebugPath -Path $ScanAgentDebug -CallingScriptRoot $PSScriptRoot
     Write-TestStep "Using ScanAgentDebug: $exe"
-    Wait-ScanAgentDebugPipeReady -DebugExe $exe -TimeoutSec $AgentStartupTimeoutSec -WaitUiMs $UiWaitMs
+    $corePolicyLoaded = $script:Sa01CorePolicyStackPushed -and (-not $SkipCorePolicySetup)
+    Wait-ScanAgentDebugPipeReady -DebugExe $exe -TimeoutSec $AgentStartupTimeoutSec -WaitUiMs $UiWaitMs `
+        -CorePolicyLoaded:$corePolicyLoaded
 
     Write-TestStep 'Resolve on-disk source path (SA-TestFiles)'
     $sourcePath = Resolve-TestSourceFolderPath -SourceFolderOverride $SourceFolder -TestFilesRootOverride $TestFilesRoot
@@ -883,6 +926,17 @@ finally {
     if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
         $evidenceOnFailure += $destinationPath
     }
+
+    if ($script:Sa01CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Sa01CoreDebugHookUrl)) {
+        try {
+            Write-TestStep 'Core: poppolicystate (restore pre-test policies and assignment rules)'
+            Restore-ScanAgentSa05CorePolicyStack -HookUrl $script:Sa01CoreDebugHookUrl | Out-Null
+        }
+        catch {
+            Write-Warning "Core poppolicystate failed: $($_.Exception.Message)"
+        }
+    }
+
     if ($script:ScenarioPassed) {
         try {
             if ($destinationPath) {

@@ -27,7 +27,11 @@ function Resolve-ScanAgentE2eAgentExePath {
     param([string] $Override = '')
 
     if (-not [string]::IsNullOrWhiteSpace($Override)) {
-        return [System.IO.Path]::GetFullPath($Override.Trim())
+        $resolvedOverride = Resolve-ResecLabWinExePath -CandidatePath $Override
+        if (-not [string]::IsNullOrWhiteSpace($resolvedOverride)) {
+            return $resolvedOverride
+        }
+        throw "Scan Agent path must resolve to Resec.Agent.ScanAgent.exe (got '$($Override.Trim())')."
     }
 
     $fromEnv = Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
@@ -45,7 +49,7 @@ function Resolve-ScanAgentE2eAgentExePath {
 $script:SaE2eScanAgentExe = Resolve-ScanAgentE2eAgentExePath -Override $ScanAgentExe
 
 # Bump when shared Scan Agent E2E Common behavior changes (Core policy import, bootstrap, debug helpers).
-$script:ScanAgentE2eLabBundleVersion = '2026.11.16.5'
+$script:ScanAgentE2eLabBundleVersion = '2026.11.16.14'
 
 function Get-ScanAgentE2eLabBundleGitRevision {
     param(

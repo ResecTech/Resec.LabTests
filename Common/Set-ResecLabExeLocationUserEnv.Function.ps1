@@ -13,9 +13,14 @@ function Set-ResecLabExeLocationUserEnv {
         [switch] $Quiet
     )
 
-    $full = [System.IO.Path]::GetFullPath($ExePath.Trim())
-    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-        throw "Executable not found: $full"
+    if (-not (Get-Command Resolve-ResecLabWinExePath -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'Resolve-ResecLabWinExePath.ps1')
+    }
+
+    $full = Resolve-ResecLabWinExePath -CandidatePath $ExePath
+    if ([string]::IsNullOrWhiteSpace($full)) {
+        $trimmed = $ExePath.Trim()
+        throw "Lab executable not found or not a .exe (co-located .exe required when path is a .dll): $trimmed"
     }
 
     $names = @(

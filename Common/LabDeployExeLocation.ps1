@@ -5,6 +5,7 @@
 #>
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'Resolve-ResecLabWinExePath.ps1')
 . (Join-Path $PSScriptRoot 'Set-ResecLabExeLocationUserEnv.Function.ps1')
 
 function Get-ResecLabDeployExeLocationProfile {
@@ -137,15 +138,9 @@ function Get-ResecLabExePathFromEnvironment {
                 continue
             }
 
-            try {
-                $full = [System.IO.Path]::GetFullPath($raw.Trim())
-            }
-            catch {
-                continue
-            }
-
-            if (Test-Path -LiteralPath $full -PathType Leaf) {
-                return $full
+            $resolved = Resolve-ResecLabWinExePath -CandidatePath $raw
+            if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+                return $resolved
             }
         }
     }

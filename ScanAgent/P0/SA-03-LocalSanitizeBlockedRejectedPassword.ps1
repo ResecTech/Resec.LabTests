@@ -12,6 +12,10 @@
   Files under SA-TestFiles\Blocked\Encrypted (or Enchrypted): when the password modal opens on select, the script
   dismisses it via ui.invoke cancelPasswordDialog (same as clicking Cancel in the UI; no password submitted).
 
+  Default Core setup (unless -SkipCorePolicySetup): pushpolicystate, importpolicies (**Test3-blocked** — executables/scripts/unknown
+  off; archive embedded-block behaviour; Windows Defender on for EICAR), commdown/commup, policy.select; poppolicystate in finally.
+  Requires Core EnableDebugInterface. Without this, a permissive policy left from SA-01/Test1-connect can yield counts.passed > 0.
+
   Prerequisites:
     - Desktop Scan Agent running with DebugInterface.Enabled = true and gateway connected.
     - SA-TestFiles\Blocked on drive C:\ with eligible fixtures (optional -TestFilesRoot / -SourceFolder).
@@ -26,6 +30,9 @@ param(
     [string] $ScanAgentDebug = '',
     [string] $SourceFolder = '',
     [string] $TestFilesRoot = '',
+    [switch] $SkipCorePolicySetup,
+    [string] $CoreDebugHookUrl = '',
+    [string] $CorePolicyName = 'Test3-blocked',
     [int] $UiWaitMs = 120000,
     [int] $SanitizePollSec = 3600,
     [int] $MaxFolderDepth = 5,
@@ -39,7 +46,7 @@ $ErrorActionPreference = 'Stop'
 
 function Get-LabTestDeployRequirements {
     Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
-    return Get-ScanAgentDeployRequirements
+    return (Get-ScanAgentDeployRequirements) + (Get-CoreDeployRequirements)
 }
 
 $script:ScenarioPassed = $false
@@ -49,8 +56,11 @@ $script:E2eRunLogPath = $null
 $script:SaE2eCommonRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common'
 $script:SaE2eReportScript = Join-Path $script:SaE2eCommonRoot 'Report-ScanAgentTestPlatformResult.ps1'
 . (Join-Path $script:SaE2eCommonRoot 'ScanAgentE2eBootstrap.ps1') -CallingScriptRoot $PSScriptRoot -ScanAgentDebug $ScanAgentDebug
+$ScanAgentExe = $script:SaE2eScanAgentExe
 
 $destinationPath = $null
+$script:Sa03CorePolicyStackPushed = $false
+$script:Sa03CoreDebugHookUrl = $null
 $script:TestFileMaxBytes = 5MB
 $script:TestBlockedExtensions = @(
     '.exe', '.dll', '.com', '.scr', '.msi', '.msp', '.hta', '.jar', '.bat', '.cmd', '.ps1', '.psm1', '.psd1', '.ps1xml',
@@ -64,6 +74,8 @@ $script:Sa03EncryptedFixtureFolderNames = @(
     'Encrypted',
     'Enchrypted'
 )
+# Lab ticket notes only (not sanitization vectors); would pass Test3-blocked as generic JSON/Others.
+$script:Sa03ExcludedJobFileNames = @('manifest.json')
 
 function Write-TestStep {
     param([string] $Message)
@@ -712,13 +724,26 @@ function Resolve-Sa03SourceFolderPath {
     return $blocked
 }
 
+function Test-IsSa03LabMetadataJobFile {
+    param([System.IO.FileInfo] $File)
+
+    return $script:Sa03ExcludedJobFileNames -contains $File.Name
+}
+
 function Get-Sa03AllEligibleFilesUnderBlocked {
     param(
         [string] $BlockedRootPath,
         [int] $MaxFolderDepth
     )
 
-    return Get-EligibleFilesUnderFolder -RootFolder $BlockedRootPath -MaxFolderDepth $MaxFolderDepth -AllowPolicyBlockedExtensions
+    $eligible = Get-EligibleFilesUnderFolder -RootFolder $BlockedRootPath -MaxFolderDepth $MaxFolderDepth -AllowPolicyBlockedExtensions
+    $jobFiles = @($eligible | Where-Object { -not (Test-IsSa03LabMetadataJobFile -File $_) })
+    $skipped = (Get-CollectionCount $eligible) - (Get-CollectionCount $jobFiles)
+    if ($skipped -gt 0) {
+        Write-TestStep "Excluded $skipped lab metadata file(s) from job (e.g. manifest.json); $($jobFiles.Count) sanitization fixture(s)"
+    }
+
+    return $jobFiles
 }
 
 function Resolve-Sa04SeedFilePath {
@@ -2083,6 +2108,18 @@ try {
     $exe = Resolve-ScanAgentDebugPath -Path $ScanAgentDebug -CallingScriptRoot $PSScriptRoot
     Write-TestStep "Using ScanAgentDebug: $exe"
 
+    if (-not $SkipCorePolicySetup) {
+        Write-TestStep 'Core: pushpolicystate + importpolicies (Test3-blocked); cold agent restart before scenario'
+        $coreSetup = Initialize-ScanAgentSa03CoreTestPolicy -Exe $exe -AgentExePath $ScanAgentExe -CoreDebugHookUrl $CoreDebugHookUrl `
+            -PolicyName $CorePolicyName -UiWaitMs $UiWaitMs
+        $script:Sa03CorePolicyStackPushed = $true
+        $script:Sa03CoreDebugHookUrl = $coreSetup.HookUrl
+        Write-TestStep "Core policy active with local C: roots: $($coreSetup.PolicyName)"
+    }
+    else {
+        Write-TestStep 'SkipCorePolicySetup: using current agent policy (must block SA-03 fixtures; local C: roots).'
+    }
+
     Write-TestStep 'ping debug pipe'
     $ping = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('ping')
     Assert-OkResponse -Response $ping -Step 'ping'
@@ -2259,6 +2296,17 @@ finally {
     if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
         $evidenceOnFailure += $destinationPath
     }
+
+    if ($script:Sa03CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Sa03CoreDebugHookUrl)) {
+        try {
+            Write-TestStep 'Core: poppolicystate (restore pre-test policies and assignment rules)'
+            Restore-ScanAgentSa05CorePolicyStack -HookUrl $script:Sa03CoreDebugHookUrl | Out-Null
+        }
+        catch {
+            Write-Warning "Core poppolicystate failed: $($_.Exception.Message)"
+        }
+    }
+
     if ($script:ScenarioPassed) {
         try {
             if ($destinationPath) {

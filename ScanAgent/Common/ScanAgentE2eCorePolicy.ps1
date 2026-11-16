@@ -342,6 +342,23 @@ function Remove-Sa05LocationFacetsFromPolicyRaw {
     return $raw
 }
 
+function Remove-SaLabRemovedCoreFacetsFromPolicyRaw {
+    <#
+      Facets removed from modern Core / Scan Agent templates — leave them in policyRawData and Core logs
+      unknown facet type and drops following properties until the next facet header.
+    #>
+    param([Parameter(Mandatory)][string] $PolicyRawData)
+
+    $headers = @(
+        'Format Transformations:Format Transformations'
+    )
+    $raw = $PolicyRawData
+    foreach ($header in $headers) {
+        $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader $header
+    }
+    return $raw
+}
+
 function Get-Sa07LabAllowedFileTypesValue {
     <#
       Modern WebMC AllowedFileTypes line (all categories allowed) so encrypted lab fixtures
@@ -402,7 +419,8 @@ function Set-Sa07PolicyRawPermissiveLabScanAgentPolicy {
     #>
     param([Parameter(Mandatory)][string] $PolicyRawData)
 
-    $raw = Set-Sa07PolicyRawAllowAllFileTypes -PolicyRawData $PolicyRawData
+    $raw = Remove-SaLabRemovedCoreFacetsFromPolicyRaw -PolicyRawData $PolicyRawData
+    $raw = Set-Sa07PolicyRawAllowAllFileTypes -PolicyRawData $raw
     $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'Scanners:Scanners'
     $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'System Health:System Health'
     $raw += @"
@@ -413,19 +431,6 @@ NumPropType_MaxScannersDefinitionAge=168
 "@
     $raw += New-Sa07LabScannersFacet
     return $raw
-}
-
-function New-SaLabDisabledFormatTransformationsFacet {
-    return @"
-;Facet Format Transformations:Format Transformations
-NumPropType_OfficeTransformation=0
-NumPropType_PdfTransformation=0
-NumPropType_ImageTransformation=0
-NumPropType_HtmlTransformation=0
-NumPropType_VisioTransformation=0
-NumPropType_ImagePixelThreshold=0
-
-"@
 }
 
 function New-SaLabDisabledTransformationActionsFacet {
@@ -446,9 +451,8 @@ BoolPropType_RetainOriginalFile=False
 function Set-SaLabPolicyRawDisableCdrAndTransformations {
     param([Parameter(Mandatory)][string] $PolicyRawData)
 
-    $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $PolicyRawData -FacetHeader 'Format Transformations:Format Transformations'
+    $raw = Remove-SaLabRemovedCoreFacetsFromPolicyRaw -PolicyRawData $PolicyRawData
     $raw = Remove-Sa05PolicyFacetBlock -PolicyRawData $raw -FacetHeader 'Transformation Actions:Transformation Actions'
-    $raw += New-SaLabDisabledFormatTransformationsFacet
     $raw += New-SaLabDisabledTransformationActionsFacet
     return $raw
 }
@@ -751,10 +755,10 @@ function Disconnect-AllCoreAgentsForRefresh {
     param(
         [Parameter(Mandatory)]
         [string] $HookUrl,
-        [Parameter(Mandatory)]
-        [string] $Exe,
+        [string] $Exe = '',
         [int] $DisconnectHoldSec = 5,
-        [int] $GatewayWaitSec = 120
+        [int] $GatewayWaitSec = 120,
+        [switch] $SkipGatewayWait
     )
 
     $down = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockon'
@@ -768,6 +772,15 @@ function Disconnect-AllCoreAgentsForRefresh {
 
     $up = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'agentcommblockoff'
     Assert-ScanAgentCoreDebugHookResponse -Response $up -Step 'agentcommblockoff (commup)'
+    if ($SkipGatewayWait) {
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commup: agent admissions re-enabled (no gateway wait; agent not started yet)."
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Exe)) {
+        throw 'Disconnect-AllCoreAgentsForRefresh requires -Exe when -SkipGatewayWait is not set.'
+    }
+
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commup: agent admissions re-enabled; waiting for Scan Agent gateway reconnect."
 
     Start-Sleep -Milliseconds 500
@@ -1408,6 +1421,429 @@ function Initialize-ScanAgentSa07CoreTestPolicy {
         PushResponse      = $pushed.PushResponse
         ImportResponse    = $imported.ImportResponse
         AgentPolicyList   = $imported.AgentPolicyList
+    }
+}
+
+# Default SA-01 lab policy (Local Source + Local Destination on Scan Agent template; applied before cold agent start).
+$script:Sa01DefaultPolicyName = 'Test1-connect'
+
+function New-Sa01CorePolicyImportBody {
+    param(
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml = '',
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test1-connect',
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa01'
+    )
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
+    $baseRaw = Set-Sa07PolicyRawPermissiveLabScanAgentPolicy -PolicyRawData $baseRaw
+    $raw = New-Sa07LocalInOutFacetBlock
+    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyId = 9101
+
+    return @{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id             = $policyId
+                name           = $PolicyName
+                displayName    = 'Debug local SA-01 (connect / sources / destinations)'
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $raw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'scan_agent'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Import-ScanAgentSa01CoreDebugPolicyBeforeAgent {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test1-connect',
+        [int] $AgentDisconnectHoldSec = 5
+    )
+
+    $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core importpolicies policy base: $($resolvedBase.Source)"
+    $importBody = New-Sa01CorePolicyImportBody `
+        -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
+        -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName
+
+    $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
+    Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-01)'
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -DisconnectHoldSec $AgentDisconnectHoldSec -SkipGatewayWait
+
+    return [pscustomobject]@{
+        PolicyBaseSource = $resolvedBase.Source
+        PolicyName       = $PolicyName
+        ImportResponse   = $import
+    }
+}
+
+function Initialize-ScanAgentSa01CoreLabPolicyBeforeAgent {
+    param(
+        [string] $CoreDebugHookUrl,
+        [string] $PolicyBaseRaw = '',
+        [string] $PolicyTemplateXml,
+        [string] $TemplatePolicyName = '',
+        [string] $PolicyName = 'Test1-connect',
+        [int] $AgentDisconnectHoldSec = 5
+    )
+
+    $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    $imported = Import-ScanAgentSa01CoreDebugPolicyBeforeAgent -HookUrl $pushed.HookUrl `
+        -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
+        -PolicyName $PolicyName -AgentDisconnectHoldSec $AgentDisconnectHoldSec
+
+    return [pscustomobject]@{
+        HookUrl          = $pushed.HookUrl
+        PolicyBaseSource = $imported.PolicyBaseSource
+        PolicyName       = $imported.PolicyName
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
+    }
+}
+
+$script:Sa03DefaultPolicyName = 'Test3-blocked'
+
+function Get-Sa03LabBlockedOutcomesAllowedFileTypesValue {
+    return 'Archives=True|CAD=True|Databases=True|Documents (Common)=True|Documents (Uncommon)=True|Email=True|Embedded Office Objects=True|Executables=False|Images=True|Media Files=True|Model=True|Others=True|Scripts=False|Unknown File=False|Unsafe=True'
+}
+
+function New-Sa03LabInfectedScannersFacet {
+    $facet = New-Sa07LabScannersFacet
+    return $facet.Replace('NumPropType_EnableScanner_Windows Defender=False', 'NumPropType_EnableScanner_Windows Defender=True')
+}
+
+function Get-Sa03LabBlockedOutcomesPolicyRawData {
+    $allowedTypes = Get-Sa03LabBlockedOutcomesAllowedFileTypesValue
+    $scannersFacet = (New-Sa03LabInfectedScannersFacet).TrimEnd()
+    $transformationActionsFacet = (New-SaLabDisabledTransformationActionsFacet).TrimEnd()
+
+    return @"
+;Facet Basic:Basic
+StrPropType_ConfigVersion=Auto
+StrPropType_AllowedFileTypes=$allowedTypes
+StrPropType_SignFiles=False
+NumPropType_MaxUploadSize=0
+NumPropType_BlockIncorrectUploadExtension=False
+BoolPropType_EnableHashAllowlist=True
+BoolPropType_EnableHashBlocklist=True
+;Facet Advanced:Advanced
+NumPropType_CheckServerCertificate=False
+;Facet Failure Behavior:Failure Behavior
+NumPropType_MaxArchiveRecursionLevels=5
+NumPropType_DisallowedFilesInArchivesBehaviour=0
+;Facet Agent Settings:Agent Settings
+NumPropType_AutoReconnect=True
+StrPropType_StatusMessage=`$(server)
+StrPropType_DetailsMessage=Debug local SA-03 (blocked / infected / password)
+NumPropType_CommunicationUploadLimitKbps=0
+NumPropType_DeleteInfectedFromSource=False
+$scannersFacet
+$transformationActionsFacet
+
+"@
+}
+
+function New-Sa03CorePolicyImportBody {
+    param(
+        [string] $PolicyName = 'Test3-blocked',
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa03'
+    )
+
+    $baseRaw = Get-Sa03LabBlockedOutcomesPolicyRawData
+    $raw = New-Sa07LocalInOutFacetBlock
+    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyId = 9103
+
+    return @{
+        command            = 'importpolicies'
+        policies           = @(
+            @{
+                id             = $policyId
+                name           = $PolicyName
+                displayName    = 'Debug local SA-03 (blocked / infected / password negative outcomes)'
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $raw
+            }
+        )
+        policyAssociations = @(
+            @{
+                name       = $AssignmentRuleName
+                enabled    = $true
+                policies   = @([string]$policyId)
+                conditions = @(
+                    @{
+                        item      = 'agent_type'
+                        condition = 'is_one_of'
+                        target    = 'scan_agent'
+                        op        = 'AND'
+                    }
+                )
+            }
+        )
+    }
+}
+
+function Write-ScanAgentCoreLabPolicyImportSummary {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string[]] $ExpectedPolicyNames = @()
+    )
+
+    $export = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'exportpolicystate'
+    Assert-ScanAgentCoreDebugHookResponse -Response $export -Step 'exportpolicystate (post-import verify)'
+    $names = @($export.policies | ForEach-Object { [string]$_.name })
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core DB policies after import: $(if ($names.Count -gt 0) { $names -join ', ' } else { '(none)' })"
+    foreach ($expected in @($ExpectedPolicyNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if ($names -notcontains $expected) {
+            throw "Core exportpolicystate missing expected lab policy '$expected'. Listed: $($names -join ', ')"
+        }
+    }
+}
+
+function Import-ScanAgentSa03CoreDebugPolicyBeforeAgent {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $PolicyName = 'Test3-blocked',
+        [int] $AgentDisconnectHoldSec = 5
+    )
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core importpolicies policy base: SA-03 embedded blocked-outcomes raw"
+    $importBody = New-Sa03CorePolicyImportBody -PolicyName $PolicyName
+
+    $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
+    Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-03)'
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -DisconnectHoldSec $AgentDisconnectHoldSec -SkipGatewayWait
+
+    Write-ScanAgentCoreLabPolicyImportSummary -HookUrl $HookUrl -ExpectedPolicyNames @($PolicyName)
+
+    return [pscustomobject]@{
+        PolicyName     = $PolicyName
+        ImportResponse = $import
+    }
+}
+
+function Import-ScanAgentSa03CoreDebugPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [string] $PolicyName = 'Test3-blocked',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $AgentDisconnectHoldSec = 5,
+        [int] $UiWaitMs = 120000
+    )
+
+    $imported = Import-ScanAgentSa03CoreDebugPolicyBeforeAgent -HookUrl $HookUrl -PolicyName $PolicyName `
+        -AgentDisconnectHoldSec $AgentDisconnectHoldSec
+
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe -DisconnectHoldSec $AgentDisconnectHoldSec
+
+    $null = Wait-ScanAgentPolicyListContainsNames -Exe $Exe -PolicyNames @($PolicyName) `
+        -TimeoutSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    return $imported
+}
+
+function Invoke-ScanAgentE2eSelectPolicyByName {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [Parameter(Mandatory)]
+        [string] $PolicyName,
+        [int] $UiWaitMs = 120000,
+        [string] $Label = ''
+    )
+
+    $context = if ([string]::IsNullOrWhiteSpace($Label)) { $PolicyName } else { $Label }
+    $select = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @(
+        'policy.select', '--name', $PolicyName, '--wait-ms', "$UiWaitMs"
+    )
+    if ($select.ok -ne $true) {
+        $err = if ($select.error) { $select.error } else { 'unknown error' }
+        throw "policy.select by name '$PolicyName' failed ($context): $err"
+    }
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Agent policy.select OK: $context"
+}
+
+function Wait-ScanAgentPanelRootVisible {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [Parameter(Mandatory)]
+        [ValidateSet('source', 'destination')]
+        [string] $Panel,
+        [Parameter(Mandatory)]
+        [string] $RootName,
+        [int] $TimeoutSec = 60
+    )
+
+    $listCommand = if ($Panel -eq 'source') { 'listSources' } else { 'listDestinations' }
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $lastRoots = @()
+    $lastProgressLog = [DateTimeOffset]::MinValue
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $list = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @($listCommand)
+        if ($list.ok -eq $true -and $null -ne $list.roots) {
+            $lastRoots = @($list.roots | ForEach-Object { [string]$_.name })
+            if ($lastRoots -contains $RootName) {
+                Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] $($Panel) panel root '$RootName' visible ($listCommand)."
+                return $list
+            }
+        }
+
+        $now = [DateTimeOffset]::UtcNow
+        if (($lastRoots | Where-Object { $_ -match 'smb' }).Count -gt 0) {
+            $listed = $lastRoots -join ', '
+            throw @"
+$Panel panel still shows SMB lab roots ($listed) but this test requires local drive '$RootName'.
+Pushpolicystate + importpolicies must run before the agent cold-starts so the agent downloads the local Source/Destination policy (not a prior SA-05 SMB policy).
+"@
+        }
+
+        if (($now - $lastProgressLog).TotalSeconds -ge 10) {
+            $listed = if ($lastRoots.Count -gt 0) { ($lastRoots -join ', ') } else { '(none)' }
+            $remainingSec = [Math]::Max(0, [int]($deadline - $now).TotalSeconds)
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Waiting for $Panel root '$RootName' ($listCommand); listed: $listed (${remainingSec}s left)"
+            $lastProgressLog = $now
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    $listed = if ($lastRoots.Count -gt 0) { ($lastRoots -join ', ') } else { '(none)' }
+    throw "Timed out after ${TimeoutSec}s waiting for $Panel root '$RootName' ($listCommand). Last roots: $listed"
+}
+
+function Sync-ScanAgentE2eLocalPanelRootsAfterPolicyChange {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $PolicyName,
+        [int] $UiWaitMs = 120000,
+        [int] $PanelRootWaitSec = 60,
+        [string] $LocalDriveRoot = 'C:'
+    )
+
+    Invoke-ScanAgentE2eSelectPolicyByName -Exe $Exe -PolicyName $PolicyName -UiWaitMs $UiWaitMs -Label 'before comm refresh'
+    Restart-ScanAgentSa05CoreAgentSessions -HookUrl $HookUrl -Exe $Exe -CommDownHoldSec 5 -GatewayWaitSec $PanelRootWaitSec
+    Invoke-ScanAgentE2eSelectPolicyByName -Exe $Exe -PolicyName $PolicyName -UiWaitMs $UiWaitMs -Label 'after comm refresh'
+
+    $ready = Invoke-ScanAgentDebug -Exe $Exe -Arguments @('waitReady', '--wait-ms', "$UiWaitMs", '--wait-loaded')
+    if ($ready.ExitCode -ne 0) {
+        throw "waitReady failed after policy location sync (exit $($ready.ExitCode)): $($ready.StdOut)"
+    }
+
+    $policyCurrent = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.current')
+    if ($policyCurrent.ok -ne $true) {
+        throw 'policy.current failed after policy location sync.'
+    }
+
+    $currentName = [string]$policyCurrent.policy.name
+    if ($currentName -ne $PolicyName) {
+        throw "Expected active policy '$PolicyName' after location sync; policy.current name is '$currentName'."
+    }
+
+    $null = Wait-ScanAgentPanelRootVisible -Exe $Exe -Panel 'source' -RootName $LocalDriveRoot -TimeoutSec $PanelRootWaitSec
+    $null = Wait-ScanAgentPanelRootVisible -Exe $Exe -Panel 'destination' -RootName $LocalDriveRoot -TimeoutSec $PanelRootWaitSec
+}
+
+function Initialize-ScanAgentSa03CoreTestPolicy {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [Parameter(Mandatory)]
+        [string] $AgentExePath,
+        [string] $CoreDebugHookUrl,
+        [string] $PolicyName = 'Test3-blocked',
+        [int] $AgentPolicyWaitSec = 180,
+        [int] $UiWaitMs = 120000,
+        [int] $GatewayWaitSec = 120,
+        [int] $PanelRootWaitSec = 60
+    )
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core: pushpolicystate (snapshot before SA-03 lab import)"
+    $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    $depth = if ($pushed.PushResponse.PSObject.Properties.Name -contains 'policyStateStackDepth') {
+        $pushed.PushResponse.policyStateStackDepth
+    } else { '?' }
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core pushpolicystate OK (policyStateStackDepth=$depth)"
+
+    $imported = Import-ScanAgentSa03CoreDebugPolicyBeforeAgent -HookUrl $pushed.HookUrl -PolicyName $PolicyName
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Stop Scan Agent so cold start loads Test3-blocked local locations from Core"
+    Stop-ScanAgentE2eDesktopAgentsInSession -AgentExePaths @($AgentExePath)
+    Start-Sleep -Seconds 2
+
+    Start-ScanAgentE2eColdUiLaunch -AgentExePath $AgentExePath
+
+    $pingDeadline = [DateTimeOffset]::UtcNow.AddSeconds($GatewayWaitSec)
+    while ([DateTimeOffset]::UtcNow -lt $pingDeadline) {
+        $ping = Test-ScanAgentE2eDebugPing -DebugExe $Exe -ConnectTimeoutMs 3000
+        if ($ping.Ok) {
+            break
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $ping.Ok) {
+        throw "ScanAgentDebug ping failed after cold launch; cannot continue SA-03."
+    }
+
+    $null = Wait-ScanAgentGatewayConnected -Exe $Exe -TimeoutSec $GatewayWaitSec -Context 'SA-03 after cold launch' -NudgeReconnect
+    $null = Wait-ScanAgentPolicyListContainsNames -Exe $Exe -PolicyNames @($PolicyName) -TimeoutSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+
+    Invoke-ScanAgentE2eSelectPolicyByName -Exe $Exe -PolicyName $PolicyName -UiWaitMs $UiWaitMs -Label 'SA-03 after cold launch'
+
+    $ready = Invoke-ScanAgentDebug -Exe $Exe -Arguments @('waitReady', '--wait-ms', "$UiWaitMs", '--wait-loaded')
+    if ($ready.ExitCode -ne 0) {
+        throw "waitReady failed after SA-03 policy select (exit $($ready.ExitCode)): $($ready.StdOut)"
+    }
+
+    $null = Wait-ScanAgentPanelRootVisible -Exe $Exe -Panel 'source' -RootName 'C:' -TimeoutSec $PanelRootWaitSec
+    $null = Wait-ScanAgentPanelRootVisible -Exe $Exe -Panel 'destination' -RootName 'C:' -TimeoutSec $PanelRootWaitSec
+
+    return [pscustomobject]@{
+        HookUrl          = $pushed.HookUrl
+        PolicyName       = $imported.PolicyName
+        PushResponse     = $pushed.PushResponse
+        ImportResponse   = $imported.ImportResponse
     }
 }
 

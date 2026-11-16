@@ -449,6 +449,60 @@ function Get-ScanAgentE2eDesktopAgentProcesses {
     return $result.ToArray()
 }
 
+function Start-ScanAgentE2eColdUiLaunch {
+    param(
+        [Parameter(Mandatory)]
+        [string] $AgentExePath,
+        [int] $SecondActivationDelaySec = 3,
+        [int] $ProcessWaitSec = 45,
+        [int] $UiWindowWaitSec = 120
+    )
+
+    $agentFull = [System.IO.Path]::GetFullPath($AgentExePath)
+    if (-not (Test-Path -LiteralPath $agentFull)) {
+        throw "Scan Agent executable not found: $agentFull"
+    }
+
+    $workDir = [System.IO.Path]::GetDirectoryName($agentFull)
+    $procName = [System.IO.Path]::GetFileNameWithoutExtension($agentFull)
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Start Scan Agent (first activation): $agentFull"
+    Start-Process -FilePath $agentFull -WorkingDirectory $workDir | Out-Null
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ProcessWaitSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (@(Get-Process -Name $procName -ErrorAction SilentlyContinue).Count -gt 0) {
+            break
+        }
+        Start-Sleep -Milliseconds 400
+    }
+
+    if ($SecondActivationDelaySec -gt 0) {
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Pause ${SecondActivationDelaySec}s before second activation (UI)"
+        Start-Sleep -Seconds $SecondActivationDelaySec
+    }
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Start Scan Agent (second activation UI): $agentFull"
+    Start-Process -FilePath $agentFull -WorkingDirectory $workDir | Out-Null
+
+    $uiDeadline = [DateTimeOffset]::UtcNow.AddSeconds($UiWindowWaitSec)
+    while ([DateTimeOffset]::UtcNow -lt $uiDeadline) {
+        foreach ($proc in @(Get-Process -Name $procName -ErrorAction SilentlyContinue)) {
+            try {
+                $proc.Refresh()
+                if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Scan Agent UI window up: pid=$($proc.Id)"
+                    return
+                }
+            }
+            catch { }
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Scan Agent UI window did not appear within ${UiWindowWaitSec}s after cold launch."
+}
+
 function Stop-ScanAgentE2eDesktopAgentsInSession {
     param(
         [string[]] $AgentExePaths = @(),

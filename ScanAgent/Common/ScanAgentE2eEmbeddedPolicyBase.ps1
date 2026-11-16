@@ -52,13 +52,6 @@ NumPropType_IsAgentDisabled=0
 StrPropType_DisabledReasonMessage=
 NumPropType_EnforceScanComment=False
 NumPropType_AllowOneScanOnly=False
-;Facet Format Transformations:Format Transformations
-NumPropType_OfficeTransformation=0
-NumPropType_PdfTransformation=2
-NumPropType_ImageTransformation=2
-NumPropType_HtmlTransformation=1
-NumPropType_VisioTransformation=1
-NumPropType_ImagePixelThreshold=0
 '@
 }
 
