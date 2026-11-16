@@ -1,0 +1,39 @@
+{
+  "ticket": "NCP-7383",
+  "description": "EML with embedded ZIP whose inner file is policy-blocked and removed. Body parts must stay Passed; only the archive row shows Content Removed (not the .eml root).",
+  "fixtureFile": "ncp7383-lab-email-archive.eml",
+  "jiraParityFixtureFile": "20261115125132oren490.eml",
+  "syntheticAttachmentZipName": "ncp7383-embedded-blocked.zip",
+  "innerBlockedFixtureRelative": "..\\..\\Blocked\\NCP-7361\\unknown-blocked.dat",
+  "cleanAttachmentFixtureRelative": "..\\..\\Mail\\E2eAttach\\clean-sample.txt",
+  "scenarioExpectations": {
+    "SingleBlocked": {
+      "minArchiveContentRemovedCount": 1,
+      "minArchivePassedCount": 0
+    },
+    "OneAttachmentRemoved": {
+      "minArchiveContentRemovedCount": 1,
+      "minArchivePassedCount": 1
+    },
+    "AllAttachmentsRemoved": {
+      "minArchiveContentRemovedCount": 2,
+      "minArchivePassedCount": 0
+    }
+  },
+  "forbiddenEmailRootOutcomeNames": [
+    "OutcomeContentRemoved"
+  ],
+  "forbiddenEmailRootOutcomeValues": [103],
+  "requiredArchiveOutcomeNames": [
+    "OutcomeContentRemoved"
+  ],
+  "requiredArchiveOutcomeValues": [103],
+  "expectedEmailRootFileNameContains": ".eml",
+  "expectedArchiveFileNameContains": ".zip",
+  "expectedPassedBodyNamePatterns": [
+    "HTML",
+    "plain",
+    "Body"
+  ],
+  "requiredArchiveDetailsPattern": "Blocking archive|objects were removed"
+}

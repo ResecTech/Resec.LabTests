@@ -69,6 +69,15 @@ cd <Resec.LabTests>\Core
 
 Targets the ticket failure path: **CDR worker output** + **`Local::`** store + synthetic **`portalServerOverride`** (DEBUG `reproNcp7374CrossPortalPutFile`) → Rabbit **`SendPutFileRequest`** → **`ExistingFile.GetExternalPathToFile`**. Policy: **`NCP7374-office-cdr-local-putfile-lab`** (`Common\CoreE2eNcp7374PutfilePolicy.ps1`). Manifest: `..\Fixtures\CrossCluster\NCP-7374\putfile-repro-manifest.json`. Default expects **repro signals** on unpatched Core; after the fix, run **`.\NCP7374-CrossPortalPutFileRepro.ps1 -AssertBugFixed`**. `sanitizecrosscluster` defaults **`simulateMqPutFileSuccess: true`** so PutFile does not wait ~5 minutes for a missing portal consumer (pass **`simulateMqPutFileSuccess: false`** on the hook body to exercise real MQ timeout).
 
+## NCP-7383 — Email Files tree: Content Removed on archive only
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7383-EmailArchiveFileOutcome.ps1
+```
+
+Policy: in-memory `importpolicies` via `Common\CoreE2eNcp7383Policy.ps1` (block **Unknown File** inside archives, remove disallowed embeds). Fixture: `..\Fixtures\Mail\NCP-7383\manifest.json`. Default **`-Scenario All`** runs three synthetic EMLs: one blocked ZIP only, blocked+clean ZIP (single attachment removed), two blocked ZIPs (all attachments removed). Optional Jira EML: `-UseJiraParityFixture`. Asserts `.eml` root **Passed**, archive row(s) **Content Removed** vs **Passed** per scenario, body **Passed** ([NCP-7383](https://resec.atlassian.net/browse/NCP-7383)).
+
 ## NCP-7373 — Email embedded xlsx removal after CDR timeout (no self file-lock)
 
 ```powershell
