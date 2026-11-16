@@ -719,6 +719,11 @@ function Invoke-ScanAgentDebugJson {
     }
 
     if ([string]::IsNullOrWhiteSpace($result.StdOut)) {
+        $firstArg = if ($Arguments.Count -gt 0) { [string]$Arguments[0] } else { '' }
+        if ($firstArg -eq 'waitReady') {
+            return [pscustomobject]@{ ok = $true; op = 'waitReady' }
+        }
+
         throw "ScanAgentDebug returned no stdout: $commandLine"
     }
 
