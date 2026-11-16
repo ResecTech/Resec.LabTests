@@ -461,6 +461,31 @@ function Set-Sa09PolicyRawLabSanitizePolicy {
     return $raw
 }
 
+function Set-Sa05PolicyRawRemainConnectedInAgentSettingsFacet {
+    <#
+      Core AgentPolicyJsonBuilder only propagates NumPropType_AutoReconnect from the Agent Settings facet (global agent setting).
+      Legacy exports and the embedded lab base place it under Advanced — that value never reaches the agent wire config.
+    #>
+    param(
+        [Parameter(Mandatory)][string] $PolicyRawData,
+        [Parameter(Mandatory)][ValidateSet('True', 'False')][string] $Value
+    )
+
+    $normalized = [regex]::Replace($PolicyRawData, '(?m)^NumPropType_AutoReconnect=.*\r?\n', '')
+
+    $agentSettingsHeader = ';Facet Agent Settings:Agent Settings'
+    $insertLine = "NumPropType_AutoReconnect=$Value`r`n"
+    if ($normalized -match [regex]::Escape($agentSettingsHeader)) {
+        return [regex]::Replace(
+            $normalized,
+            '(\r?\n;Facet Agent Settings:Agent Settings\r?\n)',
+            "`$1$insertLine",
+            1)
+    }
+
+    return "$agentSettingsHeader`r`n$insertLine$normalized"
+}
+
 function Set-Sa05PolicyRawRemainConnected {
     <#
       Scan Agent idle disconnect (30s) and gateway auto-reconnect follow NumPropType_AutoReconnect on the current policy.
@@ -468,15 +493,7 @@ function Set-Sa05PolicyRawRemainConnected {
     #>
     param([Parameter(Mandatory)][string] $PolicyRawData)
 
-    if ($PolicyRawData -match 'NumPropType_AutoReconnect=False') {
-        return [regex]::Replace($PolicyRawData, 'NumPropType_AutoReconnect=False', 'NumPropType_AutoReconnect=True')
-    }
-
-    if ($PolicyRawData -notmatch 'NumPropType_AutoReconnect=') {
-        return "NumPropType_AutoReconnect=True`r`n" + $PolicyRawData
-    }
-
-    return $PolicyRawData
+    return Set-Sa05PolicyRawRemainConnectedInAgentSettingsFacet -PolicyRawData $PolicyRawData -Value 'True'
 }
 
 function Set-Sa05PolicyRawIdleDisconnectOnInactivity {
@@ -485,15 +502,7 @@ function Set-Sa05PolicyRawIdleDisconnectOnInactivity {
     #>
     param([Parameter(Mandatory)][string] $PolicyRawData)
 
-    if ($PolicyRawData -match 'NumPropType_AutoReconnect=True') {
-        return [regex]::Replace($PolicyRawData, 'NumPropType_AutoReconnect=True', 'NumPropType_AutoReconnect=False')
-    }
-
-    if ($PolicyRawData -notmatch 'NumPropType_AutoReconnect=') {
-        return "NumPropType_AutoReconnect=False`r`n" + $PolicyRawData
-    }
-
-    return $PolicyRawData
+    return Set-Sa05PolicyRawRemainConnectedInAgentSettingsFacet -PolicyRawData $PolicyRawData -Value 'False'
 }
 
 function Wait-ScanAgentGatewayDisconnected {
@@ -567,10 +576,14 @@ function Invoke-ScanAgentCoreSessionDropAndAdmissionsOn {
     Assert-ScanAgentCoreDebugHookResponse -Response $up -Step 'agentcommblockoff (admissions on)'
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Core commup: admissions re-enabled; agent should remain disconnected ($Context)."
 
-    Start-Sleep -Milliseconds 300
-    $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
-    if ($gateway.ok -eq $true -and $gateway.isConnected -eq $true) {
-        throw "Expected gateway still disconnected after commdown/commup with Remain connected off ($Context); isConnected=true."
+    $stayOffDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+    while ([DateTimeOffset]::UtcNow -lt $stayOffDeadline) {
+        $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
+        if ($gateway.ok -eq $true -and $gateway.isConnected -eq $true) {
+            throw "Expected gateway still disconnected after commdown/commup with Remain connected off ($Context); isConnected=true."
+        }
+
+        Start-Sleep -Milliseconds 400
     }
 }
 
@@ -774,6 +787,66 @@ function Restart-ScanAgentSa05CoreAgentSessions {
 
     Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe `
         -DisconnectHoldSec $CommDownHoldSec -GatewayWaitSec $GatewayWaitSec
+}
+
+function Get-ScanAgentCoreImportPoliciesLogSummary {
+    param([Parameter(Mandatory)] $BodyObject)
+
+    $policySummaries = @(
+        foreach ($p in @($BodyObject.policies)) {
+            @{
+                id                 = $p.id
+                name               = [string]$p.name
+                agentType          = if ($p.PSObject.Properties.Name -contains 'agentType') { [string]$p.agentType } else { $null }
+                policyRawDataChars = if ($p.policyRawData) { $p.policyRawData.Length } else { 0 }
+            }
+        }
+    )
+    $associationSummaries = @(
+        foreach ($a in @($BodyObject.policyAssociations)) {
+            @{
+                name     = [string]$a.name
+                enabled  = $a.enabled
+                policies = @($a.policies)
+            }
+        }
+    )
+
+    return [ordered]@{
+        command            = 'importpolicies'
+        policies           = $policySummaries
+        policyAssociations = $associationSummaries
+    }
+}
+
+function Write-ScanAgentCorePolicyHookJson {
+    <#
+      Logs Core /debug/hook policy JSON to the E2E step stream (import/export/push/pop responses).
+    #>
+    param(
+        [Parameter(Mandatory)][string] $StepLabel,
+        $HookResponse
+    )
+
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-Host "[$timestamp] [STEP] $StepLabel"
+  if ($null -eq $HookResponse) {
+        Write-Host '  (no hook response)'
+        return
+    }
+
+    try {
+        $json = $HookResponse | ConvertTo-Json -Depth 8 -Compress
+        if ($json.Length -gt 6000) {
+            Write-Host "  $($json.Substring(0, 6000))... [truncated, length=$($json.Length)]"
+        }
+        else {
+            Write-Host "  $json"
+        }
+    }
+    catch {
+        Write-Host "  $($HookResponse | Out-String)"
+    }
 }
 
 function Push-ScanAgentSa05CorePolicyState {

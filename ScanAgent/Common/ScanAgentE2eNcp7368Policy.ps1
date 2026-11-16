@@ -94,8 +94,12 @@ function Import-ScanAgentNcp7368CoreDebugPolicy {
         -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
         -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName
 
+    $importPlan = Get-ScanAgentCoreImportPoliciesLogSummary -BodyObject $importBody
+    Write-ScanAgentCorePolicyHookJson -StepLabel 'Core importpolicies request JSON (apply lab policy state on Core)' -HookResponse $importPlan
+
     $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
     Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (NCP7368)'
+    Write-ScanAgentCorePolicyHookJson -StepLabel 'Core importpolicies response' -HookResponse $import
 
     Disconnect-AllCoreAgentsForRefresh -HookUrl $HookUrl -Exe $Exe -DisconnectHoldSec $AgentDisconnectHoldSec
 
@@ -124,7 +128,13 @@ function Initialize-ScanAgentNcp7368CoreTestPolicy {
         [int] $UiWaitMs = 120000
     )
 
+    $hookUrl = Get-ScanAgentCoreDebugHookUrl -Override $CoreDebugHookUrl
+    $preExport = Export-ScanAgentCorePolicyState -CoreDebugHookUrl $hookUrl
+    Write-ScanAgentCorePolicyHookJson -StepLabel 'Core exportpolicystate (current DB policies before lab import)' -HookResponse $preExport
+
     $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
+    Write-ScanAgentCorePolicyHookJson -StepLabel 'Core pushpolicystate (snapshot for poppolicystate restore)' -HookResponse $pushed.PushResponse
+
     $imported = Import-ScanAgentNcp7368CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
         -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
         -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs

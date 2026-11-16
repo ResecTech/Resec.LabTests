@@ -31,7 +31,10 @@ param(
     [string] $CorePolicyName = 'NCP7368-idle',
     [string] $TestFilesRoot = '',
     [int] $UiWaitMs = 120000,
-    [int] $SanitizePollSec = 1800,
+    [int] $SanitizePollSec = 300,
+    [int] $JobStartTimeoutSec = 30,
+    [int] $JobStartStalledIdleSec = 20,
+    [int] $GatewayReconnectAfterStartSec = 45,
     [switch] $UseIdleDisconnectTimer,
     [int] $IdleQuietSec = 40,
     [int] $IdleVerifyTimeoutSec = 45
@@ -76,16 +79,70 @@ function Assert-OkResponse {
     }
 }
 
+function Wait-ScanAgentSanitizationJobStarted {
+    param(
+        [Parameter(Mandatory)][string] $Exe,
+        [int] $TimeoutSec = 30,
+        [int] $StalledIdleSec = 20
+    )
+
+    Write-TestStep "Wait for sanitization job to start (inProgress, running>0, or fast complete with selected>=1), timeout ${TimeoutSec}s"
+    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
+    $stalledIdleSince = $null
+    while ([datetime]::UtcNow -lt $deadline) {
+        $status = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('sanitization.status')
+        Assert-OkResponse -Response $status -Step 'sanitization.status'
+
+        $running = [int]$status.counts.running
+        $selected = [int]$status.counts.selected
+        if ($status.inProgress -eq $true -or $status.state -eq 'running' -or $running -gt 0) {
+            return $status
+        }
+
+        if ($status.state -eq 'complete' -and $status.sanitizationFinished -eq $true -and $selected -ge 1) {
+            return $status
+        }
+
+        if ($status.state -eq 'complete' -and $status.sanitizationFinished -eq $true -and $selected -eq 0) {
+            throw 'Sanitization finished with selected=0 (selection lost after reconnect?).'
+        }
+
+        if ($status.state -eq 'idle' -and $status.sanitizationFinished -eq $true -and $status.inProgress -eq $false -and $selected -eq 0) {
+            throw 'Sanitization finished immediately without running (selection lost after reconnect?).'
+        }
+
+        if ($status.state -eq 'idle' -and $status.inProgress -eq $false -and $status.sanitizationFinished -ne $true) {
+            if (-not $stalledIdleSince) {
+                $stalledIdleSince = [datetime]::UtcNow
+            }
+            elseif (([datetime]::UtcNow - $stalledIdleSince).TotalSeconds -ge $StalledIdleSec) {
+                $main = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('ui.mainContent')
+                $canStart = if ($main.ok -eq $true -and $main.mainContent) { $main.mainContent.canStartSanitization } else { '?' }
+                throw "Job never left idle within ${StalledIdleSec}s after startSanitization (canStartSanitization=$canStart, selected=$($status.counts.selected))."
+            }
+        }
+        else {
+            $stalledIdleSince = $null
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Sanitization did not start within ${TimeoutSec}s (still idle / inProgress=false)."
+}
+
 function Wait-SanitizationComplete {
     param(
         [Parameter(Mandatory)][string] $Exe,
         [int] $TimeoutSec,
-        [int] $ExpectedSelected
+        [int] $ExpectedSelected,
+        [int] $StalledIdleSec = 90
     )
 
     Write-TestStep "Poll sanitization.status until complete (expected selected=$ExpectedSelected), timeout ${TimeoutSec}s"
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
     $finalStatus = $null
+    $stalledIdleSince = $null
     while ([datetime]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds 2
         $status = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('sanitization.status')
@@ -99,6 +156,19 @@ function Wait-SanitizationComplete {
         if ($status.state -eq 'idle' -and $status.inProgress -eq $false -and $status.sanitizationFinished -eq $true) {
             $finalStatus = $status
             break
+        }
+
+        if ($status.state -eq 'idle' -and $status.inProgress -eq $false -and $status.sanitizationFinished -ne $true) {
+            if (-not $stalledIdleSince) {
+                $stalledIdleSince = [datetime]::UtcNow
+            }
+            elseif (([datetime]::UtcNow - $stalledIdleSince).TotalSeconds -ge $StalledIdleSec) {
+                $sel = [int]$status.counts.selected
+                throw "Sanitization stuck idle without starting within ${StalledIdleSec}s (selected=$sel, sanitizationFinished=$($status.sanitizationFinished))."
+            }
+        }
+        else {
+            $stalledIdleSince = $null
         }
 
         Write-Host "  state=$($status.state) selected=$($status.counts.selected) passed=$($status.counts.passed) blocked=$($status.counts.blocked) running=$($status.counts.running)"
@@ -235,22 +305,11 @@ try {
         Write-TestStep "Test Platform componentVersion: $e2eVersion"
     }
 
-    $policyCurrentRaw = Invoke-ScanAgentDebug -Exe $exe -Arguments @('policy.current')
-    if (-not [string]::IsNullOrWhiteSpace($policyCurrentRaw.StdOut)) {
-        try {
-            $policyCurrentStart = $policyCurrentRaw.StdOut.Trim() | ConvertFrom-Json
-            if ($policyCurrentStart.ok -eq $true -and $policyCurrentStart.policy -and $policyCurrentStart.policy.name) {
-                $script:OriginalPolicyName = [string]$policyCurrentStart.policy.name
-                Write-TestStep "Original policy to restore: $($script:OriginalPolicyName)"
-            }
-        }
-        catch {
-            Write-TestStep 'policy.current output not JSON before Core setup; restore by name may be skipped in finally.'
-        }
-    }
+    $script:OriginalPolicyName = Register-ScanAgentE2eOriginalPolicyName -Exe $exe `
+        -GatewayWaitSec 120 -GatewayWaitContext 'before SA-33 Core policy setup'
 
     if (-not $SkipCorePolicySetup) {
-        Write-TestStep 'Core pushpolicystate and import NCP7368-idle (Remain connected off)'
+        Write-TestStep "Core lab policy setup: exportpolicystate → pushpolicystate → importpolicies ($CorePolicyName, Remain connected off)"
         $coreSetup = Initialize-ScanAgentNcp7368CoreTestPolicy -Exe $exe -CoreDebugHookUrl $CoreDebugHookUrl `
             -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
             -PolicyName $CorePolicyName -UiWaitMs $UiWaitMs
@@ -258,6 +317,14 @@ try {
         $script:Ncp7368CoreDebugHookUrl = $coreSetup.HookUrl
         $labSourceRoot = $coreSetup.SourceRoot
         $labDestRoot = $coreSetup.DestRoot
+
+        $depth = if ($coreSetup.PushResponse.PSObject.Properties.Name -contains 'policyStateStackDepth') {
+            $coreSetup.PushResponse.policyStateStackDepth
+        } else { '?' }
+        Write-TestStep "Core pushpolicystate OK (policyStateStackDepth=$depth); import base='$($coreSetup.PolicyBaseSource)'"
+
+        $postExport = Export-ScanAgentCorePolicyState -CoreDebugHookUrl $script:Ncp7368CoreDebugHookUrl
+        Write-ScanAgentCorePolicyHookJson -StepLabel 'Core exportpolicystate (after importpolicies; verify lab policy on Core)' -HookResponse $postExport
 
         $null = Wait-ScanAgentGatewayConnected -Exe $exe -TimeoutSec 180 -Context 'after NCP7368 Core import' -NudgeReconnect
 
@@ -309,8 +376,15 @@ try {
     Write-TestStep 'startSanitization (first attempt while gateway disconnected)'
     $start = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('ui.invoke', '--action', 'startSanitization')
     Assert-OkResponse -Response $start -Step 'startSanitization'
+    if ($start.PSObject.Properties.Name -contains 'sanitizationInProgress' -and $start.sanitizationInProgress -ne $true) {
+        Write-TestStep 'Note: startSanitization returned ok but sanitizationInProgress=false (job may still be starting on UI thread).'
+    }
 
-    $null = Wait-ScanAgentGatewayConnected -Exe $exe -TimeoutSec 120 -Context 'after startSanitization reconnect'
+    $null = Wait-ScanAgentGatewayConnected -Exe $exe -TimeoutSec $GatewayReconnectAfterStartSec `
+        -Context 'after startSanitization reconnect'
+
+    $null = Wait-ScanAgentSanitizationJobStarted -Exe $exe -TimeoutSec $JobStartTimeoutSec `
+        -StalledIdleSec $JobStartStalledIdleSec
 
     $finalStatus = Wait-SanitizationComplete -Exe $exe -TimeoutSec $SanitizePollSec -ExpectedSelected 1
     Write-TestStep "NCP-7368 first-run-after-idle-disconnect job OK; passed=$($finalStatus.counts.passed)"
@@ -328,14 +402,16 @@ finally {
     if ($script:Ncp7368CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Ncp7368CoreDebugHookUrl) -and
         -not [string]::IsNullOrWhiteSpace($exe)) {
         try {
-            Write-TestStep "Core: poppolicystate and restore agent policy '$($script:OriginalPolicyName)'"
+            Write-TestStep "Core: poppolicystate (restore pushed policy snapshot) and agent policy '$($script:OriginalPolicyName)'"
+            $pop = Restore-ScanAgentSa05CorePolicyStack -HookUrl $script:Ncp7368CoreDebugHookUrl
+            Write-ScanAgentCorePolicyHookJson -StepLabel 'Core poppolicystate response' -HookResponse $pop
             if ([string]::IsNullOrWhiteSpace($script:OriginalPolicyName)) {
-                $null = Restore-ScanAgentSa05CorePolicyStack -HookUrl $script:Ncp7368CoreDebugHookUrl
                 Disconnect-AllCoreAgentsForRefresh -HookUrl $script:Ncp7368CoreDebugHookUrl -Exe $exe -GatewayWaitSec 30
             }
             else {
-                $null = Restore-ScanAgentCorePolicyLabAndAgent -HookUrl $script:Ncp7368CoreDebugHookUrl -Exe $exe `
-                    -OriginalPolicyName $script:OriginalPolicyName -UiWaitMs $UiWaitMs
+                Disconnect-AllCoreAgentsForRefresh -HookUrl $script:Ncp7368CoreDebugHookUrl -Exe $exe -GatewayWaitSec 30
+                $null = Invoke-Ncp7368SelectCorePolicy -Exe $exe -PolicyName $script:OriginalPolicyName `
+                    -Label 'restore pre-test policy after poppolicystate'
             }
         }
         catch {

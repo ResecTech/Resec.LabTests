@@ -30,12 +30,12 @@ NumPropType_KeepAliveSec=10
 NumPropType_CopyLocalFiles=True
 NumPropType_HashAlgorithm=1
 NumPropType_DisconnectSec=30
-NumPropType_AutoReconnect=True
 NumPropType_StoreBlockedFileReport=True
 ;Facet System Health:System Health
 NumPropType_MinNumberOfValidScanners=0
 NumPropType_MaxScannersDefinitionAge=168
 ;Facet Agent Settings:Agent Settings
+NumPropType_AutoReconnect=True
 StrPropType_StatusMessage=$(server)
 StrPropType_DetailsMessage=Lab E2E embedded policy
 NumPropType_CommunicationUploadLimitKbps=0

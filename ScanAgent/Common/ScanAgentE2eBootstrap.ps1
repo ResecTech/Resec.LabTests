@@ -45,7 +45,7 @@ function Resolve-ScanAgentE2eAgentExePath {
 $script:SaE2eScanAgentExe = Resolve-ScanAgentE2eAgentExePath -Override $ScanAgentExe
 
 # Bump when shared Scan Agent E2E Common behavior changes (Core policy import, bootstrap, debug helpers).
-$script:ScanAgentE2eLabBundleVersion = '2026.11.11.3'
+$script:ScanAgentE2eLabBundleVersion = '2026.11.16.3'
 
 function Get-ScanAgentE2eLabBundleGitRevision {
     param(

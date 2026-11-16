@@ -41,11 +41,12 @@ function Resolve-ScanAgentDebugPath {
 
     $candidates.Add((Join-Path $testTreeRoot 'ScanAgentDebug.exe'))
     $candidates.Add((Join-Path $CallingScriptRoot '..\ScanAgentDebug.exe'))
+  # Prefer x64 build output (solution default) so co-located Resec.Agent.ScanAgent.exe matches the debug client.
     foreach ($configuration in @('Debug', 'Release')) {
-        $candidates.Add((Join-Path $agentBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
         $candidates.Add((Join-Path $agentBin "x64\$configuration\net10.0-windows\ScanAgentDebug.exe"))
-        $candidates.Add((Join-Path $debugClientBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
         $candidates.Add((Join-Path $debugClientBin "x64\$configuration\net10.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $agentBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $debugClientBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
     }
 
     $checked = @{}
@@ -320,6 +321,275 @@ function Register-ScanAgentE2eVersionFromAgentInfo {
     return $formatted
 }
 
+$script:ScanAgentE2eDebugPipeEnsureAttempted = $false
+
+function Get-ScanAgentE2eCurrentWindowsSessionId {
+    return [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+}
+
+function Resolve-ScanAgentE2eAgentExeFromDebugExe {
+    param(
+        [Parameter(Mandatory)]
+        [string] $DebugExe
+    )
+
+    $agentDir = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($DebugExe))
+    $coLocated = Join-Path $agentDir 'Resec.Agent.ScanAgent.exe'
+    if (Test-Path -LiteralPath $coLocated) {
+        return $coLocated
+    }
+
+    $normalizedDir = $agentDir.Replace('\', '/')
+    if ($normalizedDir -match '/bin/Debug/net10\.0-windows$') {
+        $x64Dir = $agentDir -replace '\\bin\\Debug\\', '\bin\x64\Debug\'
+        $x64Agent = Join-Path $x64Dir 'Resec.Agent.ScanAgent.exe'
+        if (Test-Path -LiteralPath $x64Agent) {
+            return $x64Agent
+        }
+    }
+
+    $preferred = ''
+    if (Get-Variable -Scope Script -Name SaE2eScanAgentExe -ErrorAction SilentlyContinue) {
+        $preferred = [string]$script:SaE2eScanAgentExe
+    }
+
+    foreach ($candidate in (Get-ScanAgentE2eAgentExeCandidates -PreferredExePath $preferred)) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Cannot resolve Resec.Agent.ScanAgent.exe for debug client '$DebugExe' (set RESEC_SCANAGENT_EXE_LOCATION or run from a Debug build output folder)."
+}
+
+function Set-ScanAgentE2eDebugInterfaceEnabled {
+    param(
+        [Parameter(Mandatory)]
+        [string] $AgentExePath,
+        [switch] $Quiet
+    )
+
+    $agentFull = [System.IO.Path]::GetFullPath($AgentExePath)
+    $settingsPath = Join-Path ([System.IO.Path]::GetDirectoryName($agentFull)) 'appsettings.json'
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        throw "appsettings.json not found next to agent exe: $settingsPath"
+    }
+
+    $raw = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8
+    $json = $raw | ConvertFrom-Json
+    $changed = $false
+    if ($json.PSObject.Properties.Name -contains 'DebugInterface') {
+        if ($json.DebugInterface.Enabled -ne $true) {
+            $json.DebugInterface.Enabled = $true
+            $changed = $true
+        }
+    }
+    else {
+        $json | Add-Member -NotePropertyName 'DebugInterface' -NotePropertyValue ([pscustomobject]@{ Enabled = $true })
+        $changed = $true
+    }
+
+    if ($changed) {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($settingsPath, ($json | ConvertTo-Json -Depth 32) + [Environment]::NewLine, $utf8)
+        if (-not $Quiet) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Enabled DebugInterface in $settingsPath"
+        }
+    }
+
+    return [pscustomobject]@{ SettingsPath = $settingsPath; Changed = $changed }
+}
+
+function Get-ScanAgentE2eDesktopAgentProcesses {
+    param(
+        [int] $SessionId = -1,
+        [string[]] $AgentExePaths = @()
+    )
+
+    if ($SessionId -lt 0) {
+        $SessionId = Get-ScanAgentE2eCurrentWindowsSessionId
+    }
+
+    $normalizedTargets = @(
+        $AgentExePaths |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [System.IO.Path]::GetFullPath($_) }
+    )
+
+    $names = @('Resec.Agent.ScanAgent')
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($name in $names) {
+        foreach ($proc in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            if ($proc.SessionId -ne $SessionId) {
+                continue
+            }
+
+            $path = $null
+            try {
+                $path = $proc.Path
+            }
+            catch {
+                continue
+            }
+
+            if ($normalizedTargets.Count -gt 0) {
+                if ([string]::IsNullOrWhiteSpace($path) -or ($normalizedTargets -notcontains [System.IO.Path]::GetFullPath($path))) {
+                    continue
+                }
+            }
+
+            [void]$result.Add($proc)
+        }
+    }
+
+    if ($result.Count -eq 0) {
+        return @()
+    }
+
+    return $result.ToArray()
+}
+
+function Stop-ScanAgentE2eDesktopAgentsInSession {
+    param(
+        [string[]] $AgentExePaths = @(),
+        [int] $SessionId = -1,
+        [int] $WaitSec = 15
+    )
+
+    if ($SessionId -lt 0) {
+        $SessionId = Get-ScanAgentE2eCurrentWindowsSessionId
+    }
+
+    $targets = @(Get-ScanAgentE2eDesktopAgentProcesses -SessionId $SessionId -AgentExePaths $AgentExePaths)
+    foreach ($proc in $targets) {
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Stopping desktop Scan Agent pid $($proc.Id) (session $SessionId)"
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($targets.Length -eq 0) {
+        return
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($WaitSec)
+    $names = @('Resec.Agent.ScanAgent')
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $left = @()
+        foreach ($name in $names) {
+            $left += @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $SessionId })
+        }
+        if (@($left).Length -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 400
+    }
+}
+
+function Add-ScanAgentE2eFromAgentSwitch {
+    param([string[]] $Arguments)
+
+    if ($Arguments -contains '--from-agent') {
+        return $Arguments
+    }
+
+    if ($env:SCANAGENT_E2E_NO_FROM_AGENT -eq '1') {
+        return $Arguments
+    }
+
+    return @('--from-agent') + @($Arguments)
+}
+
+function Test-ScanAgentE2eDebugPing {
+    param(
+        [Parameter(Mandatory)]
+        [string] $DebugExe,
+        [int] $ConnectTimeoutMs = 5000
+    )
+
+    $args = Add-ScanAgentE2eFromAgentSwitch -Arguments @('ping')
+    if ($ConnectTimeoutMs -gt 0 -and ($args -notcontains '--timeout-ms')) {
+        $args = $args + @('--timeout-ms', [string]$ConnectTimeoutMs)
+    }
+
+    $result = Invoke-ScanAgentDebugProcess -Exe $DebugExe -Arguments $args
+    if ($result.ExitCode -ne 0) {
+        $detail = if ($result.StdErr) { $result.StdErr } else { $result.StdOut }
+        return [pscustomobject]@{ Ok = $false; ExitCode = $result.ExitCode; Detail = $detail }
+    }
+
+    if ($result.StdOut -notmatch '"message"\s*:\s*"pong"') {
+        return [pscustomobject]@{ Ok = $false; ExitCode = $result.ExitCode; Detail = $result.StdOut }
+    }
+
+    return [pscustomobject]@{ Ok = $true; ExitCode = 0; Detail = $result.StdOut }
+}
+
+function Ensure-ScanAgentE2eDebugPipeReady {
+    param(
+        [Parameter(Mandatory)]
+        [string] $DebugExe,
+        [int] $StartupTimeoutSec = 90
+    )
+
+    if ($env:SCANAGENT_E2E_NO_AUTOSTART -eq '1') {
+        return
+    }
+
+    $ping = Test-ScanAgentE2eDebugPing -DebugExe $DebugExe
+    if ($ping.Ok) {
+        return
+    }
+
+    if ($script:ScanAgentE2eDebugPipeEnsureAttempted) {
+        return
+    }
+
+    $script:ScanAgentE2eDebugPipeEnsureAttempted = $true
+    $sessionId = Get-ScanAgentE2eCurrentWindowsSessionId
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Scan Agent debug pipe unavailable (session $sessionId); ensuring desktop agent with DebugInterface"
+
+    $agentExe = Resolve-ScanAgentE2eAgentExeFromDebugExe -DebugExe $DebugExe
+    $agentFull = [System.IO.Path]::GetFullPath($agentExe)
+    $workDir = [System.IO.Path]::GetDirectoryName($agentFull)
+    $settings = Set-ScanAgentE2eDebugInterfaceEnabled -AgentExePath $agentFull
+
+    $running = @(Get-ScanAgentE2eDesktopAgentProcesses -SessionId $sessionId)
+    if ($running.Length -gt 0) {
+        $paths = @($running | ForEach-Object { $_.Path }) -join ', '
+        Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Desktop Scan Agent in session $sessionId ($paths); restarting so debug pipe matches E2E client"
+    }
+
+    Stop-ScanAgentE2eDesktopAgentsInSession -AgentExePaths @() -SessionId $sessionId
+
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Starting desktop Scan Agent: $agentFull"
+    Start-Process -FilePath $agentFull -WorkingDirectory $workDir | Out-Null
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($StartupTimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $ping = Test-ScanAgentE2eDebugPing -DebugExe $DebugExe -ConnectTimeoutMs 3000
+        if ($ping.Ok) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Scan Agent debug pipe ready (ping ok)"
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    $procs = @(Get-ScanAgentE2eDesktopAgentProcesses -SessionId $sessionId)
+    $procSummary = if ($procs.Length -gt 0) {
+        (@($procs | ForEach-Object { "pid=$($_.Id) path=$($_.Path)" })) -join '; '
+    }
+    else {
+        'no Resec.Agent.ScanAgent in this session'
+    }
+
+    throw @"
+Scan Agent debug pipe still unavailable after auto-start (session $sessionId, waited ${StartupTimeoutSec}s).
+Agent exe: $agentFull
+Processes: $procSummary
+Last ping: $($ping.Detail)
+Disable auto-start with SCANAGENT_E2E_NO_AUTOSTART=1.
+"@
+}
+
 function Format-ScanAgentDebugInvokeFailure {
     param(
         [Parameter(Mandatory)]
@@ -338,12 +608,13 @@ function Format-ScanAgentDebugInvokeFailure {
     if ($pipeUnreachable) {
         $lines.Add('')
         $lines.Add('The agent debug named pipe did not respond (enable DebugInterface in appsettings; not an IDE debugger).')
+        $lines.Add('E2E scripts auto-start/restart the desktop agent and use ScanAgentDebug --from-agent unless SCANAGENT_E2E_NO_AUTOSTART=1.')
         $lines.Add('Checklist:')
         $lines.Add('  1) Desktop Scan Agent is running in this Windows session (not only the Windows service).')
         $lines.Add('  2) appsettings.json: DebugInterface.Enabled = true (repo default is false).')
         $lines.Add('  3) Restart the agent after changing DebugInterface (pipe starts at startup).')
         $lines.Add('  4) Agent log should include: [AgentDebugPipeServer] Debug interface enabled on pipe ...')
-        $lines.Add('  5) Verify manually: ScanAgentDebug ping  ->  JSON containing pong.')
+        $lines.Add('  5) Verify manually: ScanAgentDebug --from-agent ping  ->  JSON containing pong.')
     }
     elseif (($ExitCode -eq 3) -or ($detailText -match 'No running process found')) {
         $lines.Add('')
@@ -379,11 +650,19 @@ function Invoke-ScanAgentDebug {
         [string[]] $Arguments
     )
 
+    if ([string]::IsNullOrWhiteSpace($Exe)) {
+        throw 'Invoke-ScanAgentDebug requires -Exe.'
+    }
+
+    $debugFull = [System.IO.Path]::GetFullPath($Exe)
+    Ensure-ScanAgentE2eDebugPipeReady -DebugExe $debugFull
+    $Arguments = Add-ScanAgentE2eFromAgentSwitch -Arguments $Arguments
+
     $savedEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $stdoutLines = New-Object System.Collections.Generic.List[string]
     try {
-        $lines = @(& $Exe @Arguments 2>&1)
+        $lines = @(& $debugFull @Arguments 2>&1)
         foreach ($line in $lines) {
             if ($line -is [System.Management.Automation.ErrorRecord]) {
                 $msg = $line.Exception.Message
@@ -468,4 +747,38 @@ function Invoke-ScanAgentDebugJson {
             throw "ScanAgentDebug output was not JSON: $commandLine`n$stdoutText"
         }
     }
+}
+
+function Register-ScanAgentE2eOriginalPolicyName {
+    <#
+      Records the agent header policy name for finally-block restore (policy.select after poppolicystate).
+      Waits for gateway connected first so policy.current returns JSON with a selected policy (same pattern as SA-08).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [int] $GatewayWaitSec = 120,
+        [string] $GatewayWaitContext = 'before recording OriginalPolicyName'
+    )
+
+    if (Get-Command -Name Wait-ScanAgentGatewayConnected -ErrorAction SilentlyContinue) {
+        $null = Wait-ScanAgentGatewayConnected -Exe $Exe -TimeoutSec $GatewayWaitSec -Context $GatewayWaitContext -NudgeReconnect
+    }
+
+    $policyCurrent = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.current')
+    if (-not $policyCurrent.ok) {
+        $err = if ($policyCurrent.error) { $policyCurrent.error } else { 'unknown error' }
+        throw "policy.current failed ($GatewayWaitContext): $err"
+    }
+
+    if (-not $policyCurrent.policy -or [string]::IsNullOrWhiteSpace($policyCurrent.policy.name)) {
+        throw "policy.current returned no policy name ($GatewayWaitContext). Select a policy in the agent header before E2E setup."
+    }
+
+    $name = [string]$policyCurrent.policy.name
+    if (Get-Command -Name Write-TestStep -ErrorAction SilentlyContinue) {
+        Write-TestStep "Original policy to restore: $name"
+    }
+
+    return $name
 }
