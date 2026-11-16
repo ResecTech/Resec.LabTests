@@ -4,7 +4,7 @@
   SA-04: Rejected drawer count matches sanitization blocked count after a job with rejections.
 
 .DESCRIPTION
-  Selects every eligible file under SA-TestFiles\Blocked\Enchrypted, \FileTypeNotAllowed, and \Infected
+  Selects every eligible file under SA-TestFiles\Blocked\Encrypted (or Enchrypted), \FileTypeNotAllowed, and \Infected
   (including nested files under those category folders). Expects outcomeFriendly per category:
   Password Required, Blocked By Policy, and Infected respectively.
   If selecting encrypted fixtures opens the password modal, the script cancels it (cancelPasswordDialog).
@@ -58,8 +58,14 @@ $script:TestBlockedDirectoryNames = @(
     '.git', '.svn', '.hg', '.vs', '.idea', 'node_modules', 'bin', 'obj', '__pycache__', 'packages', 'dist', 'build', 'out', 'target'
 )
 $script:Sa04DefaultSourceSubfolder = 'Blocked'
+$script:Sa04EncryptedFixtureFolderNames = @(
+    'Encrypted',
+    'Enchrypted'
+)
+# Lab ticket notes only (not sanitization vectors); would pass as generic JSON/Others.
+$script:Sa04ExcludedJobFileNames = @('manifest.json')
 $script:Sa04BlockedCategorySpecs = @(
-    @{ FolderName = 'Enchrypted'; ExpectedOutcomeFriendly = 'Password Required' }
+    @{ FolderName = 'Encrypted'; ExpectedOutcomeFriendly = 'Password Required' }
     @{ FolderName = 'FileTypeNotAllowed'; ExpectedOutcomeFriendly = 'Blocked By Policy' }
     @{ FolderName = 'Infected'; ExpectedOutcomeFriendly = 'Infected' }
 )
@@ -1543,6 +1549,43 @@ function Assert-NoBlockedArtifactsOnDestinationDisk {
     Write-TestStep 'Confirmed blocked/rejected job files have no on-disk artifacts under the destination folder.'
 }
 
+function Test-IsSa04LabMetadataJobFile {
+    param([System.IO.FileInfo] $File)
+
+    return $script:Sa04ExcludedJobFileNames -contains $File.Name
+}
+
+function Resolve-Sa04EncryptedCategoryFolderPath {
+    param([string] $BlockedRootPath)
+
+    $blockedRoot = [System.IO.Path]::GetFullPath($BlockedRootPath)
+    foreach ($name in $script:Sa04EncryptedFixtureFolderNames) {
+        $categoryPath = [System.IO.Path]::GetFullPath((Join-Path $blockedRoot $name))
+        if (Test-DirectoryExists -Path $categoryPath) {
+            return $categoryPath
+        }
+    }
+
+    $expectedNames = ($script:Sa04EncryptedFixtureFolderNames -join "' or '")
+    throw "SA-04 requires category folder '$expectedNames' under '$blockedRoot'."
+}
+
+function Test-IsSa04EncryptedCategorySegment {
+    param([string] $SegmentName)
+
+    if ([string]::IsNullOrWhiteSpace($SegmentName)) {
+        return $false
+    }
+
+    foreach ($encryptedName in $script:Sa04EncryptedFixtureFolderNames) {
+        if ($SegmentName.Equals($encryptedName, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-Sa04BlockedCategoryFixtures {
     param(
         [string] $BlockedRootPath,
@@ -1555,21 +1598,42 @@ function Get-Sa04BlockedCategoryFixtures {
     }
 
     $all = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $metadataSkipped = 0
     foreach ($spec in $script:Sa04BlockedCategorySpecs) {
-        $categoryPath = [System.IO.Path]::GetFullPath((Join-Path $blockedRoot $spec.FolderName))
-        if (-not (Test-DirectoryExists -Path $categoryPath)) {
-            throw "SA-04 requires category folder '$($spec.FolderName)' under '$blockedRoot'."
+        if ($spec.ExpectedOutcomeFriendly -eq 'Password Required') {
+            $categoryPath = Resolve-Sa04EncryptedCategoryFolderPath -BlockedRootPath $blockedRoot
+            $categoryFolderLabel = Split-Path -Leaf $categoryPath
+        }
+        else {
+            $categoryPath = [System.IO.Path]::GetFullPath((Join-Path $blockedRoot $spec.FolderName))
+            $categoryFolderLabel = $spec.FolderName
+            if (-not (Test-DirectoryExists -Path $categoryPath)) {
+                throw "SA-04 requires category folder '$($spec.FolderName)' under '$blockedRoot'."
+            }
         }
         $categoryFiles = Get-EligibleFilesUnderFolder -RootFolder $categoryPath -MaxFolderDepth $MaxFolderDepth `
             -AllowPolicyBlockedExtensions
         $categoryCount = Get-CollectionCount $categoryFiles
         if ($categoryCount -lt 1) {
-            throw "SA-04 category '$($spec.FolderName)' has no eligible files under '$categoryPath'."
+            throw "SA-04 category '$categoryFolderLabel' has no eligible files under '$categoryPath'."
         }
-        Write-TestStep "SA-04 category '$($spec.FolderName)': $categoryCount file(s); expected outcome '$($spec.ExpectedOutcomeFriendly)'"
+        $addedFromCategory = 0
         foreach ($file in (ConvertTo-FileInfoArray $categoryFiles)) {
+            if (Test-IsSa04LabMetadataJobFile -File $file) {
+                $metadataSkipped++
+                continue
+            }
             $all.Add($file)
+            $addedFromCategory++
         }
+        if ($addedFromCategory -lt 1) {
+            throw "SA-04 category '$categoryFolderLabel' has no eligible sanitization fixture(s) after excluding lab metadata under '$categoryPath'."
+        }
+        Write-TestStep "SA-04 category '$categoryFolderLabel': $addedFromCategory job file(s) ($categoryCount on disk); expected outcome '$($spec.ExpectedOutcomeFriendly)'"
+    }
+
+    if ($metadataSkipped -gt 0) {
+        Write-TestStep "Excluded $metadataSkipped lab metadata file(s) from job (e.g. manifest.json)"
     }
 
     return [System.IO.FileInfo[]]$all.ToArray()
@@ -1596,7 +1660,14 @@ function Get-Sa04ExpectedOutcomeFriendlyForSourceFile {
         return $null
     }
 
+    if (Test-IsSa04EncryptedCategorySegment -SegmentName $firstSegment) {
+        return 'Password Required'
+    }
+
     foreach ($spec in $script:Sa04BlockedCategorySpecs) {
+        if ($spec.ExpectedOutcomeFriendly -eq 'Password Required') {
+            continue
+        }
         if ($firstSegment.Equals($spec.FolderName, [StringComparison]::OrdinalIgnoreCase)) {
             return [string]$spec.ExpectedOutcomeFriendly
         }
