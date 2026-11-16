@@ -1128,6 +1128,8 @@ $script:Sa08DefaultSourceRoot = 'c:\test\SA-08-in'
 $script:Sa08DefaultDestRoot = 'c:\test\SA-08-out'
 $script:Sa08DefaultSourceStoreName = 'sa08-smb-in'
 $script:Sa08DefaultDestStoreName = 'sa08-smb-out'
+# Second imported policy (local in/out) so the agent can round-trip policy.select and rebuild SMB roots (NCP-7378 class).
+$script:Sa08LocalRefreshPolicyName = 'Test8-local-refresh'
 
 function New-Sa08CorePolicyImportBody {
     param(
@@ -1147,30 +1149,45 @@ function New-Sa08CorePolicyImportBody {
     $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
         -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
     $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
-    $raw = New-Sa05SmbInOutFacetBlock `
+    $rawSmb = New-Sa05SmbInOutFacetBlock `
         -SourceStoreName $SourceStoreName -SourceRootFolder $SourceRoot `
         -DestinationStoreName $DestinationStoreName -DestinationRootFolder $DestRoot
-    $raw += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+    $rawSmb += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
 
-    $policyId = 9108
+    $rawLocal = New-Sa07LocalInOutFacetBlock
+    $rawLocal += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+
+    $policyIdSmb = 9108
+    $policyIdLocalRefresh = 9109
 
     return [ordered]@{
         command            = 'importpolicies'
         policies           = @(
             @{
-                id             = $policyId
+                id             = $policyIdSmb
                 name           = $PolicyName
                 displayName    = "Debug SMB SA-08 ($SourceRoot -> $DestRoot)"
                 agentType      = 'General'
                 isPredefined   = $false
-                policyRawData  = $raw
+                policyRawData  = $rawSmb
+            },
+            @{
+                id             = $policyIdLocalRefresh
+                name           = $script:Sa08LocalRefreshPolicyName
+                displayName    = 'Debug local SA-08 (policy-switch refresh)'
+                agentType      = 'General'
+                isPredefined   = $false
+                policyRawData  = $rawLocal
             }
         )
         policyAssociations = @(
             @{
                 name       = $AssignmentRuleName
                 enabled    = $true
-                policies   = @([string]$policyId)
+                policies   = @(
+                    [string]$policyIdSmb
+                    [string]$policyIdLocalRefresh
+                )
                 conditions = @(
                     @{
                         item      = 'agent_type'

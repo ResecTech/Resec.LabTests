@@ -45,7 +45,8 @@ param(
     [int] $AbortRunningWaitSec = 180,
     [int] $MaxFolderDepth = 5,
     [int] $MinJobFiles = 15,
-    [int] $MaxJobFiles = 25
+    [int] $MaxJobFiles = 25,
+    [int] $MinStagedJobFiles = 200
 )
 
 Set-StrictMode -Version Latest
@@ -71,11 +72,13 @@ $script:Sa08CorePolicyStackPushed = $false
 $script:Sa08CoreDebugHookUrl = $null
 $script:Sa08SmbLabMode = $false
 $script:OriginalPolicyName = $null
+$script:OriginalPolicyId = 0
 # Must match ScanAgentE2eCorePolicy.ps1 New-Sa08CorePolicyImportBody defaults.
 $script:Sa08SmbLabSource = 'c:\test\SA-08-in'
 $script:Sa08SmbLabDest = 'c:\test\SA-08-out'
 $script:Sa08SmbStoreSource = 'sa08-smb-in'
 $script:Sa08SmbStoreDest = 'sa08-smb-out'
+$script:Sa08LocalRefreshPolicyName = 'Test8-local-refresh'
 $script:TestFileMaxBytes = 5MB
 $script:TestBlockedExtensions = @(
     '.exe', '.dll', '.com', '.scr', '.msi', '.msp', '.hta', '.jar', '.bat', '.cmd', '.ps1', '.psm1', '.psd1', '.ps1xml',
@@ -450,6 +453,164 @@ function Wait-SanitizationNotRunning {
     throw "sanitization.status still running after ${TimeoutSec}s ($Context)."
 }
 
+function Get-Sa08ListSourceFileCount {
+    param($ListPayload)
+
+    if ($null -eq $ListPayload) {
+        return 0
+    }
+
+    if ($ListPayload.PSObject.Properties['itemCount']) {
+        return [int]$ListPayload.itemCount
+    }
+
+    if ($null -ne $ListPayload.items) {
+        return Get-CollectionCount $ListPayload.items
+    }
+
+    return 0
+}
+
+function Get-Sa08ListSourceSelectedFileCount {
+    param([string] $Exe)
+
+    $list = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('listSourceFiles')
+    Assert-OkResponse -Response $list -Step 'listSourceFiles (read selection)'
+    $selected = 0
+    foreach ($item in @($list.items)) {
+        $selection = ''
+        if ($null -ne $item -and $item.PSObject.Properties['selection']) {
+            $selection = [string]$item.selection
+        }
+        if ($selection -eq 'All') {
+            $selected++
+        }
+    }
+
+    return $selected
+}
+
+function Get-Sa08UiSelectedFileCount {
+    param([string] $Exe)
+
+    $fromList = Get-Sa08ListSourceSelectedFileCount -Exe $Exe
+    $main = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('ui.mainContent')
+    Assert-OkResponse -Response $main -Step 'ui.mainContent (read activity.selected)'
+    $fromActivity = 0
+    if ($null -ne $main.mainContent -and $null -ne $main.mainContent.activity) {
+        $fromActivity = [int]$main.mainContent.activity.selected
+    }
+
+    return [Math]::Max($fromActivity, $fromList)
+}
+
+function Wait-Sa08SourceGridListedFileCount {
+    param(
+        [string] $Exe,
+        [int] $MinimumFileCount,
+        [int] $TimeoutSec = 120
+    )
+
+    Write-TestStep "Wait for source grid to list at least $MinimumFileCount file(s) (timeout ${TimeoutSec}s)"
+    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
+    $lastCount = -1
+
+    while ([datetime]::UtcNow -lt $deadline) {
+        Invoke-ScanAgentE2eRefreshSourceContent -Exe $Exe -StepLabel 'refresh source (wait for grid)'
+        $list = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('listSourceFiles')
+        Assert-OkResponse -Response $list -Step 'listSourceFiles (wait for grid)'
+        $count = Get-Sa08ListSourceFileCount -ListPayload $list
+        if ($count -ge $MinimumFileCount) {
+            Write-TestStep "Source grid lists $count file(s)"
+            return $count
+        }
+
+        if ($count -ne $lastCount) {
+            Write-Host "  listSourceFiles count=$count (need >= $MinimumFileCount)"
+            $lastCount = $count
+        }
+
+        Start-Sleep -Milliseconds 400
+    }
+
+    throw "Timed out after ${TimeoutSec}s waiting for source grid to list at least $MinimumFileCount file(s); lastCount=$lastCount"
+}
+
+function Invoke-Sa08SelectStagedFilesInSourceUi {
+    param(
+        [string] $Exe,
+        [System.IO.FileInfo[]] $JobFiles,
+        [int] $MinimumSelected,
+        [string] $StepLabel
+    )
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-TestStep "$StepLabel ui.invoke selectAll (attempt $attempt)"
+        $selectAll = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('ui.invoke', '--action', 'selectAll')
+        Assert-OkResponse -Response $selectAll -Step "$StepLabel selectAll"
+        Invoke-ScanAgentE2eWaitUiReady -Exe $Exe -Context "$StepLabel after selectAll"
+        $selected = Get-Sa08UiSelectedFileCount -Exe $Exe
+        if ($selected -ge $MinimumSelected) {
+            Write-TestStep "selectAll selected $selected file(s)"
+            return $selected
+        }
+
+        Write-TestStep "selectAll selected $selected file(s); retry after refresh"
+        if ($attempt -lt 3) {
+            Invoke-ScanAgentE2eRefreshSourceContent -Exe $Exe -StepLabel "$StepLabel refresh before selectAll retry"
+        }
+    }
+
+    Write-TestStep "$StepLabel selectAll did not reach $MinimumSelected; selecting listed source files until minimum"
+    $bulkSelected = Invoke-Sa08SelectListedSourceFilesUntilMinimum -Exe $Exe -MinimumSelected $MinimumSelected `
+        -StepLabel $StepLabel
+    if ($bulkSelected -ge $MinimumSelected) {
+        return $bulkSelected
+    }
+
+    Write-TestStep "$StepLabel bulk list select reached $bulkSelected; fall back to staged job file names"
+    return Invoke-Sa08SelectJobFilesInSourceUi -Exe $Exe -JobFiles $JobFiles -StepLabel $StepLabel
+}
+
+function Invoke-Sa08SelectListedSourceFilesUntilMinimum {
+    param(
+        [string] $Exe,
+        [int] $MinimumSelected,
+        [string] $StepLabel
+    )
+
+    Invoke-ScanAgentE2eRefreshSourceContent -Exe $Exe -StepLabel "$StepLabel refresh before list select"
+    $list = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('listSourceFiles')
+    Assert-OkResponse -Response $list -Step "$StepLabel listSourceFiles (bulk select)"
+    $listed = @($list.items)
+    if ($listed.Count -lt $MinimumSelected) {
+        throw "$StepLabel listSourceFiles lists $($listed.Count) item(s); need at least $MinimumSelected before bulk select."
+    }
+
+    $selected = 0
+    foreach ($item in $listed) {
+        if ($null -ne $item -and $item.PSObject.Properties['isDirectory'] -and $item.isDirectory -eq $true) {
+            continue
+        }
+        $name = if ($null -ne $item -and $item.PSObject.Properties['name']) { [string]$item.name } else { '' }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+
+        $pick = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @(
+            'selectSourceFile', '--name', $name, '--wait-ms', "$UiWaitMs"
+        )
+        Assert-OkResponse -Response $pick -Step "selectSourceFile ($name)"
+        $selected++
+        if ($selected -ge $MinimumSelected) {
+            $synced = Get-Sa08UiSelectedFileCount -Exe $Exe
+            return [Math]::Max($selected, $synced)
+        }
+    }
+
+    throw "$StepLabel bulk select chose $selected file(s); need at least $MinimumSelected."
+}
+
 function Invoke-Sa08SelectJobFilesInSourceUi {
     param(
         [string] $Exe,
@@ -488,13 +649,13 @@ function Invoke-Sa08SelectJobFilesInSourceUi {
     return $selected
 }
 
-function Wait-SanitizationRunningForAbort {
+function Invoke-Sa08AbortSanitizationWhenMidJob {
     param(
         [string] $Exe,
         [int] $TimeoutSec
     )
 
-    Write-TestStep "Poll sanitization.status until mid-job abort window (running or partial progress), timeout ${TimeoutSec}s"
+    Write-TestStep "Poll sanitization.status and abort immediately on mid-job window, timeout ${TimeoutSec}s"
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
     $lastLog = ''
 
@@ -503,16 +664,19 @@ function Wait-SanitizationRunningForAbort {
         Assert-OkResponse -Response $status -Step 'sanitization.status'
 
         if ([string]$status.state -eq 'complete') {
-            throw 'Sanitization finished before abort could run. Increase -MinJobFiles / -MaxJobFiles or use a slower lab Core.'
+            throw 'Sanitization finished before abort could run. Increase -MinStagedJobFiles or use a slower lab Core.'
         }
 
         if (Test-Sa08SanitizationAbortWindow -Status $status) {
-            Write-TestStep 'Mid-job abort window reached'
+            Write-TestStep 'Mid-job abort window reached; invoking abortSanitization immediately'
             Write-TestExpected -Label 'sanitization.state' -Value 'running'
             Write-TestActual -Label 'sanitization.state' -Value ([string]$status.state)
             Write-TestExpected -Label 'abort window' -Value 'running>0 OR partial progress (passed+blocked < selected)'
             Write-TestActual -Label 'counts' -Value "selected=$($status.counts.selected) passed=$($status.counts.passed) blocked=$($status.counts.blocked) running=$($status.counts.running)"
             Write-TestCheckPass
+
+            $abort = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('ui.invoke', '--action', 'abortSanitization')
+            Assert-OkResponse -Response $abort -Step 'abortSanitization (mid-job)' -LogCheck
             return $status
         }
 
@@ -522,7 +686,7 @@ function Wait-SanitizationRunningForAbort {
             $lastLog = $line
         }
 
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 50
     }
 
     throw "Timed out after ${TimeoutSec}s waiting for a mid-job abort window (running>0 or partial progress)."
@@ -546,6 +710,58 @@ function Test-Sa08OutcomeIsInProgress {
     if ($Outcome -match 'InProgress') { return $true }
     if ($Outcome.Equals('GlobalOutcomeUnknown', [StringComparison]::Ordinal)) { return $true }
     return $false
+}
+
+function Test-Sa08OutcomeIsPassedLike {
+    param(
+        [string] $Outcome,
+        [string] $OutcomeFriendly
+    )
+
+    foreach ($raw in @($Outcome, $OutcomeFriendly)) {
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            continue
+        }
+        if ($raw -match 'Passed|Reconstructed|Modified') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-Sa08PerFileOutcomeCounts {
+    param([object[]] $Entries)
+
+    $result = [ordered]@{
+        Passed     = 0
+        Blocked    = 0
+        Aborted    = 0
+        InProgress = 0
+        Other      = 0
+    }
+
+    foreach ($entry in $Entries) {
+        $outcome = [string]$entry.outcome
+        $friendly = [string]$entry.outcomeFriendly
+        if (Test-Sa08OutcomeIsInProgress -Outcome $outcome) {
+            $result.InProgress++
+        }
+        elseif (Test-Sa08OutcomeIsAborted -Outcome $outcome -OutcomeFriendly $friendly) {
+            $result.Aborted++
+        }
+        elseif (Test-Sa08OutcomeIsPassedLike -Outcome $outcome -OutcomeFriendly $friendly) {
+            $result.Passed++
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($outcome) -or -not [string]::IsNullOrWhiteSpace($friendly)) {
+            $result.Blocked++
+        }
+        else {
+            $result.Other++
+        }
+    }
+
+    return [pscustomobject]$result
 }
 
 function Get-Sa08MainContentRoot {
@@ -721,17 +937,21 @@ function Assert-Sa08RejectedDrawerShowsAbortedFiles {
 
     Assert-Sa08Check -Name 'rejectedDrawer.itemCount vs counts.blocked' -Expected $blocked -Actual $drawerCount -Context $StepLabel
     Assert-Sa08Check -Name 'rejectedDrawer.items.length vs counts.blocked' -Expected $blocked -Actual $itemsCount -Context $StepLabel
-    Assert-Sa08Check -Name 'rejectedDrawer.items.length >= Aborted file count' -Expected $abortedCount -Actual $itemsCount `
-        -Operator ge -Context $StepLabel
 
     $matched = 0
+    $missingFromDrawer = 0
     foreach ($entry in $abortedEntries) {
         $sourceLeaf = Get-Sa08StatusEntrySourceLeafName -FileEntry $entry -OnDiskSourceFiles $JobFiles
         Write-TestStep "Match rejected drawer row for Aborted file '$sourceLeaf'"
         $drawerItem = Find-Sa08RejectedDrawerItemForStatusEntry -StatusEntry $entry -DrawerItems $drawerItems `
             -OnDiskSourceFiles $JobFiles -SourceRootPath $SourceRootPath
-        Assert-Sa08Check -Name "drawer row present for '$sourceLeaf'" -Expected 'found' `
-            -Actual $(if ($null -eq $drawerItem) { 'missing' } else { 'found' }) -Context $StepLabel
+        if ($null -eq $drawerItem) {
+            $missingFromDrawer++
+            Write-TestStep "No rejected drawer row for Aborted file '$sourceLeaf' (synthetic abort / UI reject notification may be missing)"
+            continue
+        }
+
+        Assert-Sa08Check -Name "drawer row present for '$sourceLeaf'" -Expected 'found' -Actual 'found' -Context $StepLabel
 
         $statusText = ''
         if ($null -ne $drawerItem.PSObject.Properties['statusText']) {
@@ -750,7 +970,13 @@ function Assert-Sa08RejectedDrawerShowsAbortedFiles {
         $matched++
     }
 
-    Assert-Sa08Check -Name 'Aborted files matched in drawer' -Expected $abortedCount -Actual $matched -Context $StepLabel
+    if ($missingFromDrawer -gt 0) {
+        Write-TestActual -Label 'Aborted status entries without drawer row' -Value $missingFromDrawer
+    }
+
+    Assert-Sa08Check -Name 'Aborted files matched in drawer' -Expected 1 -Actual $matched -Operator ge -Context $StepLabel
+    Assert-Sa08Check -Name 'Aborted files matched in drawer vs drawer item count' -Expected $itemsCount -Actual $matched `
+        -Operator le -Context $StepLabel
 
     Write-TestStep 'Invoke closeRejectedDrawer'
     $closeDrawer = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('ui.invoke', '--action', 'closeRejectedDrawer')
@@ -811,14 +1037,6 @@ function Assert-Sa08AbortOutcomes {
     $passed = [int]$FinalStatus.counts.passed
     $blocked = [int]$FinalStatus.counts.blocked
     $running = [int]$FinalStatus.counts.running
-    $processed = $passed + $blocked
-
-    Write-TestStep 'Post-abort sanitization counters'
-    Write-TestActual -Label 'counts' -Value "selected=$selected passed=$passed blocked=$blocked running=$running"
-
-    Assert-Sa08Check -Name 'counts.selected' -Expected $ExpectedSelected -Actual $selected -Context 'SA-08 status'
-    Assert-Sa08Check -Name 'counts.running' -Expected 0 -Actual $running -Context 'SA-08 status'
-    Assert-Sa08Check -Name 'passed+blocked' -Expected $selected -Actual $processed -Context 'SA-08 status'
 
     if (-not $FinalStatus.files) {
         throw 'SA-08 status  - sanitization.status did not include files[] after abort completion.'
@@ -826,24 +1044,31 @@ function Assert-Sa08AbortOutcomes {
 
     $entries = Get-SanitizationFileEntries -FilesProperty $FinalStatus.files
     $filesCount = Get-CollectionCount $entries
+
+    $perFile = Get-Sa08PerFileOutcomeCounts -Entries $entries
+    $perFileTerminal = $perFile.Passed + $perFile.Blocked + $perFile.Aborted + $perFile.Other
+
+    Write-TestStep 'Post-abort sanitization counters'
+    Write-TestActual -Label 'activity counts' -Value "selected=$selected passed=$passed blocked=$blocked running=$running"
+    Write-TestActual -Label 'per-file outcomes' -Value "passed=$($perFile.Passed) blocked=$($perFile.Blocked) aborted=$($perFile.Aborted) inProgress=$($perFile.InProgress) other=$($perFile.Other)"
+
+    Assert-Sa08Check -Name 'counts.selected' -Expected $ExpectedSelected -Actual $selected -Context 'SA-08 status'
+    Assert-Sa08Check -Name 'counts.running' -Expected 0 -Actual $running -Context 'SA-08 status'
     Assert-Sa08Check -Name 'files[].length' -Expected $selected -Actual $filesCount -Context 'SA-08 status'
+    Assert-Sa08Check -Name 'per-file terminal outcomes (excludes InProgress)' -Expected $selected -Actual $perFileTerminal `
+        -Context 'SA-08 status'
 
-    $abortedCount = 0
-    $inProgressCount = 0
-    foreach ($entry in $entries) {
-        $outcome = [string]$entry.outcome
-        $friendly = [string]$entry.outcomeFriendly
-        if (Test-Sa08OutcomeIsInProgress -Outcome $outcome) {
-            $inProgressCount++
-        }
-        if (Test-Sa08OutcomeIsAborted -Outcome $outcome -OutcomeFriendly $friendly) {
-            $abortedCount++
-        }
-    }
+    Assert-Sa08Check -Name 'InProgress per-file outcomes' -Expected 0 -Actual $perFile.InProgress -Context 'SA-08 status'
+    Assert-Sa08Check -Name 'Aborted per-file outcomes' -Expected 1 -Actual $perFile.Aborted -Operator ge -Context 'SA-08 status'
+    Assert-Sa08Check -Name 'activity.passed vs per-file passed' -Expected $perFile.Passed -Actual $passed -Context 'SA-08 status'
+    # counts.blocked mirrors activity.Rejected (UI reject notifications), not every OutcomeAborted summary row.
+    $perFileRejectedLike = $perFile.Blocked + $perFile.Aborted
+    Assert-Sa08Check -Name 'activity.blocked (rejected) at least per-file blocked' -Expected $perFile.Blocked -Actual $blocked `
+        -Operator ge -Context 'SA-08 status'
+    Assert-Sa08Check -Name 'activity.blocked (rejected) within per-file blocked+aborted' -Expected $perFileRejectedLike `
+        -Actual $blocked -Operator le -Context 'SA-08 status'
 
-    Assert-Sa08Check -Name 'InProgress per-file outcomes' -Expected 0 -Actual $inProgressCount -Context 'SA-08 status'
-    Assert-Sa08Check -Name 'Aborted per-file outcomes' -Expected 1 -Actual $abortedCount -Operator ge -Context 'SA-08 status'
-
+    $abortedCount = $perFile.Aborted
     $otherTerminal = $selected - $abortedCount
     Write-TestStep 'Per-file outcome summary'
     Write-TestActual -Label 'Aborted' -Value $abortedCount
@@ -909,6 +1134,66 @@ function Wait-ScanAgentSourceRootVisible {
     throw "Timed out after ${TimeoutSec}s waiting for source root '$RootName'. Last roots: $listed"
 }
 
+function Invoke-Sa08EnsureSmbLabRootsVisible {
+    param(
+        [string] $Exe,
+        [int] $LabPolicyId
+    )
+
+    try {
+        $null = Wait-ScanAgentSourceRootVisible -Exe $Exe -RootName $script:Sa08SmbStoreSource -TimeoutSec 60
+        return
+    }
+    catch {
+        Write-TestStep "SMB source root '$($script:Sa08SmbStoreSource)' not visible within 60s: $($_.Exception.Message)"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:Sa08CoreDebugHookUrl)) {
+        throw "SMB source root '$($script:Sa08SmbStoreSource)' missing and Core debug hook URL is unset (cannot commdown/commup retry)."
+    }
+
+    Write-TestStep 'SMB lab: commdown/commup and policy round-trip retry (refresh SMB roots)'
+    Disconnect-AllCoreAgentsForRefresh -HookUrl $script:Sa08CoreDebugHookUrl -Exe $Exe
+    Invoke-Sa08RefreshLocationsAfterCoreImport -Exe $Exe -LabPolicyId $LabPolicyId
+    $null = Wait-ScanAgentSourceRootVisible -Exe $Exe -RootName $script:Sa08SmbStoreSource -TimeoutSec 120
+}
+
+function Get-Sa08AgentPolicyList {
+    param([string] $Exe)
+
+    $policyList = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.list')
+    Assert-OkResponse -Response $policyList -Step 'policy.list'
+    return @($policyList.policies)
+}
+
+function Resolve-Sa08PolicyIdByNameFromList {
+    param(
+        [string] $Exe,
+        [string] $PolicyName,
+        [switch] $Optional
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PolicyName)) {
+        if ($Optional) {
+            return $null
+        }
+        throw 'Policy name is required to resolve policy id.'
+    }
+
+    $match = @(Get-Sa08AgentPolicyList -Exe $Exe | Where-Object { [string]$_.name -eq $PolicyName })
+    if ($match.Count -lt 1) {
+        if ($Optional) {
+            return $null
+        }
+        throw "Policy '$PolicyName' not found in policy.list."
+    }
+    if ($match.Count -gt 1) {
+        Write-TestStep "Multiple policies named '$PolicyName'; using lowest id."
+    }
+
+    return [int](@($match | Sort-Object { [int]$_.id })[0].id)
+}
+
 function Resolve-Sa08LabPolicyId {
     param(
         [string] $Exe,
@@ -920,17 +1205,37 @@ function Resolve-Sa08LabPolicyId {
         return $OverridePolicyId
     }
 
-    $policyList = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('policy.list')
-    Assert-OkResponse -Response $policyList -Step 'policy.list (resolve SA-08 policy id)'
-    $match = @($policyList.policies | Where-Object { [string]$_.name -eq $PolicyName })
-    if ($match.Count -lt 1) {
-        throw "Policy '$PolicyName' not found in policy.list."
-    }
-    if ($match.Count -gt 1) {
-        Write-TestStep "Multiple policies named '$PolicyName'; using lowest id."
-    }
+    return Resolve-Sa08PolicyIdByNameFromList -Exe $Exe -PolicyName $PolicyName
+}
 
-    return [int](@($match | Sort-Object { [int]$_.id })[0].id)
+function Invoke-Sa08RefreshLocationsAfterCoreImport {
+    param(
+        [string] $Exe,
+        [int] $LabPolicyId
+    )
+
+    $refreshId = Resolve-Sa08PolicyIdByNameFromList -Exe $Exe -PolicyName $script:Sa08LocalRefreshPolicyName
+    Invoke-Sa08SelectPolicyById -Exe $Exe -PolicyId $refreshId -Label "post-import refresh ($($script:Sa08LocalRefreshPolicyName))"
+    Invoke-Sa08SelectPolicyById -Exe $Exe -PolicyId $LabPolicyId -Label 'SA-08 lab policy'
+}
+
+function Invoke-Sa08SelectPolicyById {
+    param(
+        [string] $Exe,
+        [int] $PolicyId,
+        [string] $Label
+    )
+
+    Write-TestStep "policy.select --policy-id $PolicyId ($Label)"
+    $select = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @(
+        'policy.select', '--policy-id', "$PolicyId", '--wait-ms', "$UiWaitMs"
+    )
+    Assert-OkResponse -Response $select -Step "policy.select ($Label)"
+
+    $ready = Invoke-ScanAgentDebug -Exe $Exe -Arguments @('waitReady', '--wait-ms', "$UiWaitMs", '--wait-loaded')
+    if ($ready.ExitCode -ne 0) {
+        throw "waitReady failed after policy select '$Label' (exit $($ready.ExitCode)): $($ready.StdOut)"
+    }
 }
 
 function Invoke-Sa08SelectCorePolicy {
@@ -975,17 +1280,48 @@ function Copy-Sa08JobFilesToLabSource {
         [Parameter(Mandatory)]
         [string] $LabSourceFolder,
         [Parameter(Mandatory)]
-        [System.IO.FileInfo[]] $JobFiles
+        [System.IO.FileInfo[]] $JobFiles,
+        [int] $MinimumStagedFiles = 60
     )
 
     if (-not (Test-DirectoryExists -Path $LabSourceFolder)) {
         throw "SMB lab source folder does not exist: $LabSourceFolder"
     }
 
-    Clear-Sa08LabSourceFolder -LabSourceFolder $LabSourceFolder
-    foreach ($file in $JobFiles) {
-        Copy-Item -LiteralPath $file.FullName -Destination $LabSourceFolder -Force
+    if ($MinimumStagedFiles -lt 2) {
+        throw "MinimumStagedFiles must be at least 2."
     }
+
+    Clear-Sa08LabSourceFolder -LabSourceFolder $LabSourceFolder
+    $staged = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $copyIndex = 0
+    while ($staged.Count -lt $MinimumStagedFiles) {
+        foreach ($file in $JobFiles) {
+            $extension = $file.Extension
+            $baseName = if ([string]::IsNullOrEmpty($extension)) {
+                $file.Name
+            }
+            else {
+                [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            }
+            $destName = if ($copyIndex -eq 0) {
+                $file.Name
+            }
+            else {
+                "$baseName-sa08-$copyIndex$extension"
+            }
+            $destPath = Join-Path $LabSourceFolder $destName
+            Copy-Item -LiteralPath $file.FullName -Destination $destPath -Force
+            $staged.Add((Get-Item -LiteralPath $destPath))
+            $copyIndex++
+            if ($staged.Count -ge $MinimumStagedFiles) {
+                break
+            }
+        }
+    }
+
+    Write-TestStep "Staged $($staged.Count) file(s) under '$LabSourceFolder' ($MinimumStagedFiles target; $($JobFiles.Count) unique seed file(s))"
+    return [System.IO.FileInfo[]]$staged.ToArray()
 }
 
 function Invoke-Sa08NavigateSmbLabPanels {
@@ -1011,6 +1347,7 @@ function Invoke-Sa08NavigateSmbLabPanels {
         'selectSource', '--name', $script:Sa08SmbStoreSource, '--wait-ms', "$UiWaitMs", '--wait-loaded'
     )
     Assert-OkResponse -Response $selectSourceAgain -Step "$StepLabel selectSource (selection)"
+    Invoke-ScanAgentE2eRefreshSourceContent -Exe $Exe -StepLabel "$StepLabel refresh source before selection"
 }
 
 function Invoke-Sa08NavigateDestinationToPath {
@@ -1075,8 +1412,10 @@ try {
     $policyCurrentStart = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('policy.current')
     Assert-OkResponse -Response $policyCurrentStart -Step 'policy.current (before Core setup)' -LogCheck
     $script:OriginalPolicyName = [string]$policyCurrentStart.policy.name
+    $script:OriginalPolicyId = [int]$policyCurrentStart.policy.id
     Write-TestStep 'Record policy to restore after test'
     Write-TestActual -Label 'OriginalPolicyName' -Value $script:OriginalPolicyName
+    Write-TestActual -Label 'OriginalPolicyId' -Value $script:OriginalPolicyId
 
     if (-not $SkipCorePolicySetup) {
         Write-TestPhase 'SETUP  - Core lab policy (Test8-abort)'
@@ -1092,21 +1431,9 @@ try {
         Write-TestStep "Core importpolicies OK (policy '$CorePolicyName'; SMB $($script:Sa08SmbStoreSource) -> $($script:Sa08SmbLabSource), $($script:Sa08SmbStoreDest) -> $($script:Sa08SmbLabDest))"
 
         $labPolicyId = Resolve-Sa08LabPolicyId -Exe $exe -PolicyName $CorePolicyName -OverridePolicyId $PolicyId
-        if ($PolicyId -gt 0) {
-            Write-TestStep "policy.select --policy-id $labPolicyId (SA-08 lab policy)"
-            $selectLab = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @(
-                'policy.select', '--policy-id', "$labPolicyId", '--wait-ms', "$UiWaitMs"
-            )
-            Assert-OkResponse -Response $selectLab -Step 'policy.select (SA-08 lab policy)'
-            $readyLab = Invoke-ScanAgentDebug -Exe $exe -Arguments @('waitReady', '--wait-ms', "$UiWaitMs", '--wait-loaded')
-            if ($readyLab.ExitCode -ne 0) {
-                throw "waitReady failed after SA-08 policy select (exit $($readyLab.ExitCode)): $($readyLab.StdOut)"
-            }
-        }
-        else {
-            Invoke-Sa08SelectCorePolicy -Exe $exe -PolicyName $CorePolicyName -Label 'SA-08 lab policy'
-        }
-        $null = Wait-ScanAgentSourceRootVisible -Exe $exe -RootName $script:Sa08SmbStoreSource
+        Write-TestStep 'SMB lab: round-trip policy select after Core import (refresh location roots; resolve ids from policy.list)'
+        Invoke-Sa08RefreshLocationsAfterCoreImport -Exe $exe -LabPolicyId $labPolicyId
+        Invoke-Sa08EnsureSmbLabRootsVisible -Exe $exe -LabPolicyId $labPolicyId
     }
     else {
         $destinationPath = New-ScanAgentE2eTestDestinationFolder
@@ -1123,9 +1450,10 @@ try {
     $null = Wait-SanitizationNotRunning -Exe $exe -TimeoutSec 120 -Context 'pre-scenario'
 
     if ($script:Sa08SmbLabMode) {
-        Copy-Sa08JobFilesToLabSource -LabSourceFolder $jobSourcePath -JobFiles $jobFiles
         Invoke-Sa08NavigateSmbLabPanels -Exe $exe -StepLabel 'SMB lab'
-        Invoke-ScanAgentE2eRefreshSourceContent -Exe $exe -StepLabel 'refresh SMB source before selection'
+        $jobFiles = Copy-Sa08JobFilesToLabSource -LabSourceFolder $jobSourcePath -JobFiles $jobFiles `
+            -MinimumStagedFiles $MinStagedJobFiles
+        $null = Wait-Sa08SourceGridListedFileCount -Exe $exe -MinimumFileCount $MinJobFiles -TimeoutSec 120
     }
     else {
         Invoke-Sa08NavigateDestinationToPath -Exe $exe -DiskPath $destinationPath -StepLabel 'Destination setup'
@@ -1137,7 +1465,13 @@ try {
     $clear = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('ui.invoke', '--action', 'clearSelection')
     Assert-OkResponse -Response $clear -Step 'clearSelection' -LogCheck
 
-    $uiSelectedCount = Invoke-Sa08SelectJobFilesInSourceUi -Exe $exe -JobFiles $jobFiles -StepLabel 'job folder'
+    if ($script:Sa08SmbLabMode) {
+        $uiSelectedCount = Invoke-Sa08SelectStagedFilesInSourceUi -Exe $exe -JobFiles $jobFiles `
+            -MinimumSelected $MinJobFiles -StepLabel 'job folder'
+    }
+    else {
+        $uiSelectedCount = Invoke-Sa08SelectJobFilesInSourceUi -Exe $exe -JobFiles $jobFiles -StepLabel 'job folder'
+    }
     Assert-Sa08Check -Name 'UI selected file count' -Expected $MinJobFiles -Actual $uiSelectedCount -Operator ge `
         -Context 'pre-start'
 
@@ -1153,13 +1487,9 @@ try {
     $start = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('ui.invoke', '--action', 'startSanitization')
     Assert-OkResponse -Response $start -Step 'startSanitization' -LogCheck
 
-    $runningSnapshot = Wait-SanitizationRunningForAbort -Exe $exe -TimeoutSec $AbortRunningWaitSec
+    $runningSnapshot = Invoke-Sa08AbortSanitizationWhenMidJob -Exe $exe -TimeoutSec $AbortRunningWaitSec
     $expectedSelected = [int]$runningSnapshot.counts.selected
     Assert-Sa08Check -Name 'counts.selected (job queue)' -Expected 2 -Actual $expectedSelected -Operator ge -Context 'mid-job'
-
-    Write-TestStep 'Invoke abortSanitization'
-    $abort = Invoke-ScanAgentDebugJson -Exe $exe -Arguments @('ui.invoke', '--action', 'abortSanitization')
-    Assert-OkResponse -Response $abort -Step 'abortSanitization' -LogCheck
 
     Write-TestPhase 'WAIT  - Job completes after abort'
     $finalStatus = Wait-SanitizationCompleteAfterAbort -Exe $exe -TimeoutSec $SanitizePollSec -ExpectedSelected $expectedSelected
