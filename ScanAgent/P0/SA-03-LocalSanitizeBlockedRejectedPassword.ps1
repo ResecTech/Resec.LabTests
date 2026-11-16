@@ -2249,23 +2249,16 @@ try {
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
         $evidenceOnFailure += $destinationPath
     }
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-03' -TestTitle 'Local sanitize blocked rejected password' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
-
     if ($script:ScenarioPassed) {
         try {
             if ($destinationPath) {
@@ -2273,8 +2266,14 @@ finally {
             }
         }
         catch {
-            Write-Error "Teardown failed after successful test: $($_.Exception.Message)"
-            exit 1
+            $script:ScenarioPassed = $false
+            $script:ScenarioFailureMessage = "Teardown failed after successful test: $($_.Exception.Message)"
+            Write-Error $script:ScenarioFailureMessage
         }
     }
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-03' -TestTitle 'Local sanitize blocked rejected password' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

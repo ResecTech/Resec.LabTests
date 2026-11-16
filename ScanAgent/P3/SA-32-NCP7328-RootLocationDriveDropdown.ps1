@@ -345,18 +345,9 @@ try {
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
-    throw
+    Write-Error "Scenario failed: $($_.Exception.Message)"
 }
 finally {
-    try {
-        Complete-ScanAgentE2eTest -TestId 'SA-32' -TestTitle 'NCP7328 root location drive dropdown (0/1/many)' `
-            -Passed:$script:ScenarioPassed -FailureMessage $script:ScenarioFailureMessage `
-            -StartedAtUtc $script:TestStartedAtUtc -RunLogPath $script:E2eRunLogPath
-    }
-    finally {
-        Stop-ScanAgentE2eRunLog
-    }
-
     if ($script:Ncp7328CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Ncp7328CoreDebugHookUrl)) {
         try {
             Write-TestStep 'Core: poppolicystate + agent reconnect + restore pre-test policy selection'
@@ -374,12 +365,7 @@ finally {
     }
 }
 
-if ($script:ScenarioPassed) {
-    Write-Host ''
-    Write-Host 'SA-32 (NCP-7328) PASSED' -ForegroundColor Green
-    exit 0
-}
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-32' -TestTitle 'NCP7328 root location drive dropdown (0/1/many)'
 
-Write-Host ''
-Write-Host 'SA-32 (NCP-7328) FAILED' -ForegroundColor Red
-exit 1
+Exit-ScanAgentE2eScenario

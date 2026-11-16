@@ -1170,12 +1170,10 @@ try {
 
     $script:ScenarioPassed = $true
     Write-TestPhase 'SA-08  - SCENARIO PASSED'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     if ($script:Sa08CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Sa08CoreDebugHookUrl) -and
@@ -1196,11 +1194,6 @@ finally {
         if ($jobSourcePath -and (Test-Path -LiteralPath $jobSourcePath)) { $evidenceOnFailure += $jobSourcePath }
     }
 
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-08' -TestTitle 'Abort mid-job status action bar' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
-
     if ($script:ScenarioPassed) {
         try {
             if ($script:Sa08SmbLabMode) {
@@ -1216,8 +1209,14 @@ finally {
             }
         }
         catch {
-            Write-Error "Teardown failed after successful test: $($_.Exception.Message)"
-            exit 1
+            $script:ScenarioPassed = $false
+            $script:ScenarioFailureMessage = "Teardown failed after successful test: $($_.Exception.Message)"
+            Write-Error $script:ScenarioFailureMessage
         }
     }
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-08' -TestTitle 'Abort mid-job status action bar' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

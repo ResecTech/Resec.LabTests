@@ -333,7 +333,11 @@ function Complete-ScanAgentE2eTest {
     try {
         $reportMessage = $FailureMessage
         if (-not $Passed) {
-            $reportMessage = Merge-ScanAgentE2eFailureMessageWithPaths -FailureMessage $FailureMessage `
+            if ([string]::IsNullOrWhiteSpace($reportMessage)) {
+                $reportMessage = 'Scenario failed (no failure message provided).'
+            }
+
+            $reportMessage = Merge-ScanAgentE2eFailureMessageWithPaths -FailureMessage $reportMessage `
                 -EvidencePathsOnFailure $EvidencePathsOnFailure
         }
 

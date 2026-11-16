@@ -292,20 +292,19 @@ Assert-DestinationSizeNearSource -SourceSizeBytes $sourceSizeBytes -DestinationP
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed -and $script:Sa16DestinationFolder -and (Test-Path -LiteralPath $script:Sa16DestinationFolder)) {
         $evidenceOnFailure += $script:Sa16DestinationFolder
     }
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-16' -TestTitle 'Drive sanitize xlsx modified' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-16' -TestTitle 'Drive sanitize xlsx modified' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

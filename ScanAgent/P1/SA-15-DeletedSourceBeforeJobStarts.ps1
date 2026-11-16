@@ -1246,23 +1246,16 @@ try {
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     $evidenceOnFailure = @()
     if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
         $evidenceOnFailure += $destinationPath
     }
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-15' -TestTitle 'Deleted source before job starts' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
-
     try {
         Restore-Sa15SourceFixture -SourceFilePath $script:Sa15SourceFile -BackupPath $script:Sa15SourceBackupPath
     }
@@ -1275,8 +1268,14 @@ finally {
             Remove-SanitizationDestinationArtifacts -DestinationFilePaths $script:FollowUpDestinationCleanupPaths
         }
         catch {
-            Write-Error "Teardown failed after successful test: $($_.Exception.Message)"
-            exit 1
+            $script:ScenarioPassed = $false
+            $script:ScenarioFailureMessage = "Teardown failed after successful test: $($_.Exception.Message)"
+            Write-Error $script:ScenarioFailureMessage
         }
     }
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-15' -TestTitle 'Deleted source before job starts' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

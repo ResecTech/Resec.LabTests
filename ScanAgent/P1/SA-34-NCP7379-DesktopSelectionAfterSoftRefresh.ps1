@@ -177,8 +177,7 @@ function Resolve-SourceRootName {
 }
 
 try {
-    $script:TestStartedAtUtc = [DateTimeOffset]::UtcNow
-    $script:E2eRunLogPath = Start-ScanAgentE2eRunLog -TestId 'SA-34'
+    Initialize-ScanAgentE2eScenarioState -TestId 'SA-34'
 
     $exe = Resolve-ScanAgentDebugPath -CallingScriptRoot $PSScriptRoot -Path $ScanAgentDebug
     Write-TestStep "ScanAgentDebug: $exe"
@@ -272,16 +271,13 @@ try {
 
     $script:ScenarioPassed = $true
     Write-TestStep 'SA-34 / NCP-7379 scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
-finally {
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-34' -TestTitle 'NCP-7379 Desktop selection after soft refresh' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath
-}
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-34' -TestTitle 'NCP-7379 Desktop selection after soft refresh'
+
+Exit-ScanAgentE2eScenario

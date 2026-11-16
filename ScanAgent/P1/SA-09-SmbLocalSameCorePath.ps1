@@ -43,6 +43,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-LabTestDeployRequirements {
+    Import-LabDeploySuiteDefaultsFromScriptRoot -ScriptRoot $PSScriptRoot
+    return Get-ScanAgentDeployRequirements
+}
+
 $script:ScenarioPassed = $false
 $script:ScenarioFailureMessage = $null
 $script:TestStartedAtUtc = [DateTimeOffset]::MinValue
@@ -787,12 +792,10 @@ try {
 
     $script:ScenarioPassed = $true
     Write-Host 'Scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     if ($script:Sa09CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Sa09CoreDebugHookUrl)) {
@@ -814,18 +817,19 @@ finally {
         }
     }
 
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-09' -TestTitle 'SMB local same Core path Local SMB routes' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
-
     if ($script:ScenarioPassed) {
         try {
             Remove-Sa09DestinationArtifacts -Folders $script:Sa09DestinationFolders
         }
         catch {
-            Write-Error "Teardown failed after successful test: $($_.Exception.Message)"
-            exit 1
+            $script:ScenarioPassed = $false
+            $script:ScenarioFailureMessage = "Teardown failed after successful test: $($_.Exception.Message)"
+            Write-Error $script:ScenarioFailureMessage
         }
     }
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-09' -TestTitle 'SMB local same Core path Local SMB routes' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

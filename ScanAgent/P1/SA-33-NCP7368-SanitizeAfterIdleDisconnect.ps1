@@ -391,12 +391,10 @@ try {
 
     $script:ScenarioPassed = $true
     Write-TestStep 'SA-33 / NCP-7368 scenario passed.'
-    exit 0
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
     Write-Error "Scenario failed: $($_.Exception.Message)"
-    exit 1
 }
 finally {
     if ($script:Ncp7368CorePolicyStackPushed -and -not [string]::IsNullOrWhiteSpace($script:Ncp7368CoreDebugHookUrl) -and
@@ -425,11 +423,6 @@ finally {
         if ($labDestRoot -and (Test-Path -LiteralPath $labDestRoot)) { $evidenceOnFailure += $labDestRoot }
     }
 
-    Invoke-ScanAgentE2eTestPlatformReportingFinally -ReportScriptPath $script:SaE2eReportScript `
-        -TestId 'SA-33' -TestTitle 'NCP-7368 sanitize after idle disconnect' -Passed:$script:ScenarioPassed `
-        -FailureMessage $script:ScenarioFailureMessage -StartedAtUtc $script:TestStartedAtUtc `
-        -RunLogPath $script:E2eRunLogPath -EvidencePathsOnFailure $evidenceOnFailure
-
     if ($script:ScenarioPassed) {
         try {
             Clear-Ncp7368LabSourceFolder -Folder $labSourceRoot
@@ -439,3 +432,8 @@ finally {
         }
     }
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-33' -TestTitle 'NCP-7368 sanitize after idle disconnect' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario

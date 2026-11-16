@@ -39,40 +39,33 @@ Helpers are in `ScanAgentE2eDestination.ps1` and `ScanAgentE2eNavigation.ps1` (l
 
 ## Usage in an E2E script
 
-Dot-source the report script **before** `try` so `Invoke-ScanAgentE2eTestPlatformReportingFinally` is in scope in `finally` (PowerShell 5.1).
+Dot-source `ScanAgentE2eBootstrap.ps1` (loads `ScanAgentE2eTestLifecycle.ps1` and reporting). Do **not** `throw` from `catch` — that can skip the exit helper. Report **after** `finally` teardown so a teardown failure is reported as Failed.
 
 ```powershell
-$reportScript = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common\Report-ScanAgentTestPlatformResult.ps1'
-. $reportScript
-
-$script:TestStartedAtUtc = [DateTimeOffset]::UtcNow
-$script:ScenarioFailureMessage = $null
-$script:E2eRunLogPath = Start-ScanAgentE2eRunLog -TestId 'SA-04'
+$script:SaE2eReportScript = Join-Path $script:SaE2eCommonRoot 'Report-ScanAgentTestPlatformResult.ps1'
+. (Join-Path $script:SaE2eCommonRoot 'ScanAgentE2eBootstrap.ps1') -CallingScriptRoot $PSScriptRoot
 
 try {
+    $script:E2eRunLogPath = Start-ScanAgentE2eRunLog -TestId 'SA-04'
     # ... test body ...
     $script:ScenarioPassed = $true
 }
 catch {
     $script:ScenarioFailureMessage = $_.Exception.Message
-    throw
+    Write-Error "Scenario failed: $($_.Exception.Message)"
 }
 finally {
-    try {
-        $evidence = @()
-        if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
-            $evidence += $destinationPath
-        }
-        Complete-ScanAgentE2eTest -TestId 'SA-04' -TestTitle 'Rejected drawer count matches blocked' `
-            -Passed:$script:ScenarioPassed -FailureMessage $script:ScenarioFailureMessage `
-            -StartedAtUtc $script:TestStartedAtUtc -EvidencePathsOnFailure $evidence `
-            -RunLogPath $script:E2eRunLogPath
+    $evidenceOnFailure = @()
+    if (-not $script:ScenarioPassed -and $destinationPath -and (Test-Path -LiteralPath $destinationPath)) {
+        $evidenceOnFailure += $destinationPath
     }
-    finally {
-        Stop-ScanAgentE2eRunLog
-    }
-    # ... existing teardown ...
+    # ... teardown that may set $script:ScenarioPassed = $false ...
 }
+
+Report-ScanAgentE2eScenarioToTestPlatform -ReportScriptPath $script:SaE2eReportScript `
+    -TestId 'SA-04' -TestTitle 'Rejected drawer count matches blocked' -EvidencePathsOnFailure $evidenceOnFailure
+
+Exit-ScanAgentE2eScenario
 ```
 
 On **failure**, optional `-EvidencePathsOnFailure` entries are expanded to **file names** in the result **message** (folders are scanned recursively; no evidence zip).
