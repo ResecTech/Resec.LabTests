@@ -21,7 +21,7 @@ PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `
 | 4 | `P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1` | NCP-7361 - policy-blocked unknown fixture (`Fixtures\Blocked\NCP-7361\unknown-blocked.dat`) must land under **Rejected Folder** for behavior **0** (single folder) or **1** (by reason). Run behavior **1** explicitly: `-RejectedBehavior 1`. Script uses fixed 5s rejected / 2s clean waits (ignores Lab Test Runner timeout overrides). |
 | 5 | `P0\DW-05-NCP7376-SameFileTwiceFromIncomingRoot.ps1` | NCP-7376 — after first pass reaches clean SMB output, copying the **same file** to the **incoming root** again must be picked up (source clears; second sanitize outcome). |
 | 6 | `P0\DW-06-NCP7377-PeriodicFileCheckStopRegex.ps1` | NCP-7377 — periodic file check with **Process pre-existing files** off and **Periodic File Check Stop Regex** `.*\stop`; files under `stop` folders must not sanitize; files under a normal folder must still reach clean output. |
-| 7 | `P0\DW-08-NCP7385-BulkIncomingCompletesAfterCommDrop.ps1` | NCP-7385 — bulk drop into incoming; Core **agentcommblockon/off** during ingest; all files must reach clean output (needs **Resec.Agent.Gateway ≥ 26.2.107** with idle-connect fix). Default clean/ingest waits: **10s** each (`-CleanOutputTimeoutSec` / `-IngestIdleTimeoutSec` to override). |
+| 7 | `P0\DW-08-NCP7385-BulkIncomingCompletesAfterCommDrop.ps1` | NCP-7385 — **1000** small files (Ben **1K**); comm block early in drop; pass = **all** clean outputs (**Gateway ≥ 26.2.115**, DW slot hold). Orphan JobContext log assert only when `BulkFileCount <= 50` or `-AssertNoOrphanJobContext`. Smoke: `-BulkFileCount 8 ... -AssertNoOrphanJobContext`. |
 
 Example:
 

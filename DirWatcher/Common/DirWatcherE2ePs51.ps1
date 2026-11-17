@@ -523,14 +523,20 @@ function Wait-DirWatcherE2eAllCleanOutputs {
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $cleanFull -PathType Container) {
             $onDisk = Get-ChildItem -LiteralPath $cleanFull -File -Recurse -Force -ErrorAction SilentlyContinue
+            $onDiskByName = @{}
+            foreach ($f in $onDisk) {
+                if (-not $onDiskByName.ContainsKey($f.Name)) {
+                    $onDiskByName[$f.Name] = $f.FullName
+                }
+            }
+
             foreach ($name in $expected) {
                 if ($found.ContainsKey($name)) {
                     continue
                 }
 
-                $match = $onDisk | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-                if ($null -ne $match) {
-                    $found[$name] = $match.FullName
+                if ($onDiskByName.ContainsKey($name)) {
+                    $found[$name] = $onDiskByName[$name]
                 }
             }
         }
