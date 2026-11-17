@@ -277,3 +277,72 @@ function Resolve-SendBulkAttachmentMailPath {
         -CallingScriptRoot $CallingScriptRoot -ExplicitPath $Path `
         -EnvironmentVariableName $script:MailAgentE2eSendBulkAttachmentMailEnvVar
 }
+
+function Get-MailAgentE2eAgentExePathCandidates {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $ExplicitPath = ''
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $candidates.Add($ExplicitPath.Trim())
+    }
+
+    $fromEnv = Get-MailAgentE2eExePathFromEnvironment
+    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+        $candidates.Add($fromEnv)
+    }
+
+    $repoRoot = Get-MailAgentE2eRepoRoot -CallingScriptRoot $CallingScriptRoot
+    $productDir = Join-Path $repoRoot 'src'
+    foreach ($configuration in @('Debug', 'Release')) {
+        $candidates.Add((Join-Path $productDir "bin\$configuration\net10.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
+        $candidates.Add((Join-Path $productDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
+        $candidates.Add((Join-Path $productDir "bin\publish\single-file\Resec.Agent.Mail.exe"))
+    }
+
+    try {
+        $fromPath = Get-Command -Name 'Resec.Agent.Mail.exe' -ErrorAction Stop
+        if ($null -ne $fromPath -and -not [string]::IsNullOrWhiteSpace($fromPath.Source)) {
+            $candidates.Add($fromPath.Source)
+        }
+    }
+    catch {
+    }
+
+    return $candidates
+}
+
+function Resolve-MailAgentE2eAgentExePath {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $Path = ''
+    )
+
+    $checked = @{}
+    foreach ($candidate in @(Get-MailAgentE2eAgentExePathCandidates -CallingScriptRoot $CallingScriptRoot -ExplicitPath $Path)) {
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+        }
+        catch {
+            continue
+        }
+
+        if ($checked.ContainsKey($resolved)) {
+            continue
+        }
+
+        $checked[$resolved] = $true
+        if (Test-Path -LiteralPath $resolved) {
+            return $resolved
+        }
+    }
+
+    throw @"
+Resec.Agent.Mail.exe not found. Set RESEC_MAIL_AGENT_EXE_LOCATION or LAB_MAIL_AGENT_EXE, pass -MailAgentExePath,
+or build Resec.Agent.Mail (Debug|Release) under src\bin.
+"@
+}

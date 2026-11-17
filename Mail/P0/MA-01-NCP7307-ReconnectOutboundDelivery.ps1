@@ -8,7 +8,7 @@
   Each scenario: bulk inbound send, staging detection, commdown/commup, mail agent reconnect wait, delivery assert.
 
   Prerequisites:
-    - Core with EnableDebugInterface=True; mail agent with EnableDebugInterface=true (debug hook :4505).
+    - Core with EnableDebugInterface=True; mail agent debug hook :4505 (script starts Resec.Agent.Mail when needed unless -SkipStartMailAgent).
     - Policy next hop on SimpleMailPort.
     - Optional -MailTempFolder / MAIL_E2E_TEMP_FOLDER; otherwise resolved from mail agent debug status (tempFolderRoot).
 
@@ -60,7 +60,10 @@ param(
     [string] $CaptureSaveFolder = '',
     [string] $SimpleMailListenHost = '127.0.0.1',
     [int] $SimpleMailStartupTimeoutSec = 20,
-    [switch] $SkipStartSimpleMailServer
+    [switch] $SkipStartSimpleMailServer,
+    [string] $MailAgentExePath = '',
+    [int] $MailAgentStartupTimeoutSec = 90,
+    [switch] $SkipStartMailAgent
 )
 
 Set-StrictMode -Version Latest
@@ -157,6 +160,8 @@ Assert-Ma01E2eArtifacts -SimpleMailServerPathOverride $SimpleMailServerPath `
 $script:OverallPassed = $true
 $simpleMailProcess = $null
 $simpleMailStartedByScript = $false
+$mailAgentProcess = $null
+$mailAgentStartedByScript = $false
 
 function Write-TestStep {
     param([string] $Message)
@@ -770,6 +775,14 @@ try {
     Write-TestStep 'Waiting for Core readiness (debug ready).'
     Wait-MailAgentCoreReady -BaseUrl $CoreDebugBaseUrl | Out-Null
 
+    Write-TestStep 'Ensuring mail agent is running (debug hook).'
+    $mailEnsure = Ensure-MailAgentE2eProcessRunning -CallingScriptRoot $PSScriptRoot `
+        -BaseUrl $MailAgentDebugBaseUrl -MailAgentExePath $MailAgentExePath `
+        -ExpectedInboundPort $InboundSmtpPort -StartupTimeoutSec $MailAgentStartupTimeoutSec `
+        -SkipStart:$SkipStartMailAgent
+    $mailAgentProcess = $mailEnsure.Process
+    $mailAgentStartedByScript = [bool]$mailEnsure.StartedByScript
+
     Write-TestStep 'Waiting for mail agent debug readiness.'
     $agentStatus = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugBaseUrl -ExpectedInboundPort $InboundSmtpPort
     Write-TestStep ("Mail agent: {0}" -f (Format-MailAgentDebugStatusSummary -Status $agentStatus))
@@ -824,6 +837,15 @@ finally {
     if ($simpleMailStartedByScript -and $simpleMailProcess -and -not $simpleMailProcess.HasExited) {
         try {
             Stop-Process -Id $simpleMailProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+        }
+    }
+
+    if ($mailAgentStartedByScript -and $mailAgentProcess -and -not $mailAgentProcess.HasExited) {
+        try {
+            Write-TestStep "Stopping mail agent started by MA-01 (pid=$($mailAgentProcess.Id))."
+            Stop-Process -Id $mailAgentProcess.Id -Force -ErrorAction SilentlyContinue
         }
         catch {
         }

@@ -25,6 +25,8 @@ E2E scripts bootstrap **Windows PowerShell 5.1** by dot-sourcing `MailAgentE2eBo
 | `MAIL_E2E_TEMP_FOLDER` | Mail agent policy temp folder (SanitizationOutput parent); optional if debug `status` exposes `tempFolderRoot` |
 | `MAIL_E2E_SIMPLE_MAIL_SERVER_EXE` | Full path to `SimpleMailServer.exe` (after `-SimpleMailServerPath` param) |
 | `MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE` | Full path to `SendBulkAttachmentMail.exe` (after `-SendBulkAttachmentMailPath` param) |
+| `RESEC_MAIL_AGENT_EXE_LOCATION` / `LAB_MAIL_AGENT_EXE` | Full path to `Resec.Agent.Mail.exe` for E2E auto-start |
+| `MAILAGENT_E2E_NO_AUTOSTART` | `1` to disable mail agent auto-start (MA-01) |
 
 ## E2E utility paths
 
@@ -41,7 +43,7 @@ Use `-Force` to replace variables that are already set. Implementation: `MailAge
 ## Lab prerequisites (NCP-7307 reconnect scenario)
 
 1. Core running with `AppSettings:EnableDebugInterface` = `True`.
-2. Mail agent running with root `EnableDebugInterface` = `true` (debug hook on **127.0.0.1:4505**); registered as relay **mail**; policy next hop → SimpleMailServer port (default **26**).
+2. Mail agent registered as relay **mail** with policy next hop → SimpleMailServer port (default **26**). MA-01 **auto-starts** `Resec.Agent.Mail.exe` when the debug hook is down (sets `EnableDebugInterface` in appsettings next to the exe). Use `-SkipStartMailAgent` or `MAILAGENT_E2E_NO_AUTOSTART=1` to require a pre-running agent.
 3. Build **SimpleMailServer** (`Resec.LabTests\Tools\SimpleMailServer`) and **SendBulkAttachmentMail** (Mail repo), or use publish single-file outputs.
 4. MA-01 starts (or verifies) **SimpleMailServer.exe --cli** on the capture port (default **127.0.0.1:26**), then runs **two** scenarios: short commdown hold (default **10s**, `MA-01-Short`) and long hold (default **30s**, `MA-01-Long`). Use `-Scenarios Short|Long|All` to filter; tune holds via `-ShortCommDownHoldSeconds` / `-LongCommDownHoldSeconds`.
 
@@ -51,4 +53,4 @@ See `Resec.Core.Server/docs/core-debug-api.md`. Scripts use `commdown` / `commup
 
 ## Mail agent debug
 
-When `EnableDebugInterface` is enabled, `GET http://127.0.0.1:4505/debug/hook?command=<name>` supports `version`, `logpath`, `exepath`, `status`, and `exit`. The `status` command includes Gateway connectivity: `coreConnectionStatus` (`Disconnected` / `Connected` / `Authenticated`), `coreConnecting`, `coreSessionPhase`, plus `coreConnected` (authenticated ready). E2E helpers live in `MailAgentE2eMailAgentDebug.ps1` (`Wait-MailAgentDebugReady`, `Wait-MailAgentDebugReconnect` after Core `commup`, staging folder from `status.tempFolderRoot`, failure evidence from `logpath`).
+When `EnableDebugInterface` is enabled, `GET http://127.0.0.1:4505/debug/hook?command=<name>` supports `version`, `logpath`, `exepath`, `status`, and `exit`. The `status` command includes Gateway connectivity: `coreConnectionStatus` (`Disconnected` / `Connected` / `Authenticated`), `coreConnecting`, `coreSessionPhase`, plus `coreConnected` (authenticated ready). E2E helpers live in `MailAgentE2eMailAgentDebug.ps1` (`Ensure-MailAgentE2eProcessRunning`, `Wait-MailAgentDebugReady`, `Wait-MailAgentDebugReconnect` after Core `commup`, staging folder from `status.tempFolderRoot`, failure evidence from `logpath`).

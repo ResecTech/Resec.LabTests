@@ -302,6 +302,204 @@ function Get-MailAgentDebugLogPathEvidence {
     return $null
 }
 
+$script:MailAgentE2eProcessEnsureAttempted = $false
+
+function Test-MailAgentDebugHookAvailable {
+    param([string] $BaseUrl = '')
+
+    try {
+        $null = Invoke-MailAgentDebugHook -Command 'version' -BaseUrl $BaseUrl
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Write-MailAgentE2eAutostartStep {
+    param([string] $Message)
+    Write-Host ("[{0}] [STEP] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+}
+
+function Set-MailAgentE2eDebugInterfaceEnabled {
+    param(
+        [Parameter(Mandatory)]
+        [string] $AgentExePath,
+        [switch] $Quiet
+    )
+
+    $agentFull = [System.IO.Path]::GetFullPath($AgentExePath)
+    $settingsPath = Join-Path ([System.IO.Path]::GetDirectoryName($agentFull)) 'appsettings.json'
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        throw "appsettings.json not found next to mail agent exe: $settingsPath"
+    }
+
+    $raw = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8
+    $json = $raw | ConvertFrom-Json
+    $changed = $false
+    if ($json.PSObject.Properties.Name -contains 'EnableDebugInterface') {
+        if ($json.EnableDebugInterface -ne $true) {
+            $json.EnableDebugInterface = $true
+            $changed = $true
+        }
+    }
+    else {
+        $json | Add-Member -NotePropertyName 'EnableDebugInterface' -NotePropertyValue $true
+        $changed = $true
+    }
+
+    if ($changed) {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($settingsPath, ($json | ConvertTo-Json -Depth 32) + [Environment]::NewLine, $utf8)
+        if (-not $Quiet) {
+            Write-MailAgentE2eAutostartStep "Enabled EnableDebugInterface in $settingsPath"
+        }
+    }
+
+    return [pscustomobject]@{ SettingsPath = $settingsPath; Changed = $changed }
+}
+
+function Get-MailAgentE2eDesktopAgentProcesses {
+    param(
+        [string] $AgentExePath = ''
+    )
+
+    $targetFull = $null
+    if (-not [string]::IsNullOrWhiteSpace($AgentExePath)) {
+        $targetFull = [System.IO.Path]::GetFullPath($AgentExePath)
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($proc in @(Get-Process -Name 'Resec.Agent.Mail' -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try {
+            $path = $proc.Path
+        }
+        catch {
+            continue
+        }
+
+        if ($null -ne $targetFull -and -not [string]::IsNullOrWhiteSpace($path)) {
+            if ([System.IO.Path]::GetFullPath($path) -ne $targetFull) {
+                continue
+            }
+        }
+
+        [void]$result.Add($proc)
+    }
+
+    if ($result.Count -eq 0) {
+        return @()
+    }
+
+    return $result.ToArray()
+}
+
+function Stop-MailAgentE2eDesktopAgents {
+    param(
+        [string] $AgentExePath = ''
+    )
+
+    foreach ($proc in @(Get-MailAgentE2eDesktopAgentProcesses -AgentExePath $AgentExePath)) {
+        try {
+            Write-MailAgentE2eAutostartStep "Stopping mail agent pid=$($proc.Id)"
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Host "[WARN] Could not stop mail agent pid=$($proc.Id): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Ensure-MailAgentE2eProcessRunning {
+    <#
+    .SYNOPSIS
+      Starts Resec.Agent.Mail when the debug hook on port 4505 is down (unless skipped or MAILAGENT_E2E_NO_AUTOSTART=1).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $BaseUrl = '',
+        [string] $MailAgentExePath = '',
+        [int] $ExpectedInboundPort = 0,
+        [int] $StartupTimeoutSec = 90,
+        [switch] $SkipStart
+    )
+
+    $startedByScript = $false
+    $startedProcess = $null
+
+    if ($SkipStart) {
+        return [pscustomobject]@{ StartedByScript = $false; Process = $null }
+    }
+
+    if ($env:MAILAGENT_E2E_NO_AUTOSTART -eq '1') {
+        return [pscustomobject]@{ StartedByScript = $false; Process = $null }
+    }
+
+    if (Test-MailAgentDebugHookAvailable -BaseUrl $BaseUrl) {
+        try {
+            $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+            if (Test-MailAgentDebugOperationalReady -Status $status -ExpectedInboundPort $ExpectedInboundPort) {
+                Write-MailAgentE2eAutostartStep 'Mail agent debug hook already operational'
+                return [pscustomobject]@{ StartedByScript = $false; Process = $null }
+            }
+        }
+        catch {
+        }
+    }
+
+    if ($script:MailAgentE2eProcessEnsureAttempted) {
+        return [pscustomobject]@{ StartedByScript = $false; Process = $null }
+    }
+
+    $script:MailAgentE2eProcessEnsureAttempted = $true
+    $agentExe = Resolve-MailAgentE2eAgentExePath -CallingScriptRoot $CallingScriptRoot -Path $MailAgentExePath
+    $agentFull = [System.IO.Path]::GetFullPath($agentExe)
+    $workDir = [System.IO.Path]::GetDirectoryName($agentFull)
+
+    $null = Set-MailAgentE2eDebugInterfaceEnabled -AgentExePath $agentFull
+
+    $running = @(Get-MailAgentE2eDesktopAgentProcesses)
+    if ($running.Length -gt 0) {
+        $paths = @($running | ForEach-Object { $_.Path }) -join ', '
+        Write-MailAgentE2eAutostartStep "Mail agent process(es) running without usable debug hook ($paths); restarting for E2E"
+        Stop-MailAgentE2eDesktopAgents
+        Start-Sleep -Seconds 2
+    }
+
+    Write-MailAgentE2eAutostartStep "Starting mail agent: $agentFull"
+    $startedProcess = Start-Process -FilePath $agentFull -WorkingDirectory $workDir -PassThru -WindowStyle Normal
+    $startedByScript = $true
+
+    try {
+        $null = Wait-MailAgentDebugReady -BaseUrl $BaseUrl -ExpectedInboundPort $ExpectedInboundPort -TimeoutSec $StartupTimeoutSec
+    }
+    catch {
+        $procs = @(Get-MailAgentE2eDesktopAgentProcesses -AgentExePath $agentFull)
+        $procSummary = if ($procs.Length -gt 0) {
+            (@($procs | ForEach-Object { "pid=$($_.Id)" })) -join '; '
+        }
+        else {
+            'no Resec.Agent.Mail process'
+        }
+
+        throw @"
+Mail agent debug hook still unavailable after auto-start (waited ${StartupTimeoutSec}s).
+Agent exe: $agentFull
+Processes: $procSummary
+$($_.Exception.Message)
+Disable auto-start with MAILAGENT_E2E_NO_AUTOSTART=1 or pass -SkipStartMailAgent.
+"@
+    }
+
+    return [pscustomobject]@{
+        StartedByScript = $startedByScript
+        Process         = $startedProcess
+        AgentExePath    = $agentFull
+    }
+}
+
 function Initialize-MailAgentE2eComponentVersionFromDebug {
     param([string] $BaseUrl = '')
 
