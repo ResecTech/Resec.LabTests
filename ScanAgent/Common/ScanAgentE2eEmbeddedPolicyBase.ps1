@@ -18,7 +18,7 @@ function Get-ScanAgentE2eEmbeddedPolicyBaseRaw {
     return @'
 ;Facet Basic Settings:Basic Settings
 StrPropType_ConfigVersion=Auto
-StrPropType_AllowedFileTypes=Executable=True|Document=True|Encrypted=True|Archive=True|Database=True|Image=True|Script=True|XML=True|Video=True|Model=True|Movie=True|Audio=True|Other=True|Unknown=True
+StrPropType_AllowedFileTypes=Archives=True|CAD=True|Databases=True|Documents (Common)=True|Documents (Uncommon)=True|Email=True|Embedded Office Objects=True|Executables=True|Images=True|Media Files=True|Model=True|Others=True|Scripts=True|Unknown File=True|Unsafe=True
 StrPropType_SignFiles=False
 NumPropType_MaxArchiveRecursionLevels=5
 NumPropType_DisallowedFilesInArchivesBehaviour=1

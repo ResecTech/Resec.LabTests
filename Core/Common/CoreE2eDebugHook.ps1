@@ -114,6 +114,32 @@ function Invoke-CoreE2eDebugHook {
     return Invoke-CoreE2eRestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
 }
 
+function Set-CoreE2eSanitizationProcessingDelay {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [int] $DelaySeconds
+    )
+
+    if ($DelaySeconds -lt 0) {
+        throw "DelaySeconds must be >= 0 (got $DelaySeconds)."
+    }
+
+    $command = if ($DelaySeconds -eq 0) { 'sanitizationdelayoff' } else { 'sanitizationdelay' }
+    if ($DelaySeconds -eq 0) {
+        $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command $command
+    }
+    else {
+        $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command $command -BodyObject @{
+            delaySeconds = $DelaySeconds
+        }
+    }
+
+    Assert-CoreE2eDebugHookResponse -Response $response -Step "sanitization processing delay ($DelaySeconds s)"
+    return $response
+}
+
 function Write-CoreE2eDebugLogMark {
     param(
         [Parameter(Mandatory)]

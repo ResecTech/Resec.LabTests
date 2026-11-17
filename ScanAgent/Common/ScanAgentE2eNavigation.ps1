@@ -64,6 +64,31 @@ function Invoke-ScanAgentE2eWaitUiReady {
     }
 }
 
+function Wait-ScanAgentSourceRootVisible {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Exe,
+        [Parameter(Mandatory)]
+        [string] $RootName,
+        [int] $TimeoutSec = 60
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $lastRoots = @()
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $listSources = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('listSources')
+        Assert-OkResponse -Response $listSources -Step "listSources (wait for source root '$RootName')"
+        $lastRoots = @($listSources.roots | ForEach-Object { [string] $_.name })
+        if ($lastRoots -contains $RootName) {
+            return $listSources
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    $listed = if ($lastRoots.Count -gt 0) { $lastRoots -join ', ' } else { '(none)' }
+    throw "Timed out after ${TimeoutSec}s waiting for source root '$RootName'. Last roots: $listed"
+}
+
 function Invoke-NavigateDestinationSegments {
     param(
         [Parameter(Mandatory)]

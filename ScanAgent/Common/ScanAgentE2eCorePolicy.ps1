@@ -500,6 +500,30 @@ function Set-Sa05PolicyRawRemainConnected {
     return Set-Sa05PolicyRawRemainConnectedInAgentSettingsFacet -PolicyRawData $PolicyRawData -Value 'True'
 }
 
+function Set-Sa05PolicyRawCommunicationUploadLimitKbps {
+    param(
+        [Parameter(Mandatory)][string] $PolicyRawData,
+        [Parameter(Mandatory)][int] $Kbps
+    )
+
+    if ($Kbps -lt 0) {
+        throw "CommunicationUploadLimitKbps cannot be negative (got $Kbps)."
+    }
+
+    $normalized = [regex]::Replace($PolicyRawData, '(?m)^NumPropType_CommunicationUploadLimitKbps=.*\r?\n', '')
+    $insertLine = "NumPropType_CommunicationUploadLimitKbps=$Kbps`r`n"
+    $agentSettingsHeader = ';Facet Agent Settings:Agent Settings'
+    if ($normalized -match [regex]::Escape($agentSettingsHeader)) {
+        return [regex]::Replace(
+            $normalized,
+            '(\r?\n;Facet Agent Settings:Agent Settings\r?\n)',
+            "`$1$insertLine",
+            1)
+    }
+
+    return "$agentSettingsHeader`r`n$insertLine$normalized"
+}
+
 function Set-Sa05PolicyRawIdleDisconnectOnInactivity {
     <#
       WebMC "Remain connected" disabled: NumPropType_AutoReconnect=False enables IdleDisconnectPolicy (NCP-7368).
@@ -1141,7 +1165,8 @@ function New-Sa08CorePolicyImportBody {
         [string] $DestRoot = 'c:\test\SA-08-out',
         [string] $SourceStoreName = 'sa08-smb-in',
         [string] $DestinationStoreName = 'sa08-smb-out',
-        [string] $AssignmentRuleName = 'debug-scan-agents-sa08'
+        [string] $AssignmentRuleName = 'debug-scan-agents-sa08',
+        [int] $CommunicationUploadLimitKbps = 0
     )
 
     Ensure-Sa05SmbLabFolders -FolderPaths @($SourceRoot, $DestRoot) -MarkerPrefix 'SA-08'
@@ -1149,10 +1174,15 @@ function New-Sa08CorePolicyImportBody {
     $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
         -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName
     $baseRaw = Remove-Sa05LocationFacetsFromPolicyRaw -PolicyRawData $resolvedBase.BaseRaw
+    # Core 26.2+ does not honor legacy AllowedFileTypes tokens (Document=True|Image=True|…); they collapse to a single category.
+    $baseRaw = Set-Sa07PolicyRawAllowAllFileTypes -PolicyRawData $baseRaw
     $rawSmb = New-Sa05SmbInOutFacetBlock `
         -SourceStoreName $SourceStoreName -SourceRootFolder $SourceRoot `
         -DestinationStoreName $DestinationStoreName -DestinationRootFolder $DestRoot
     $rawSmb += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
+    if ($CommunicationUploadLimitKbps -gt 0) {
+        $rawSmb = Set-Sa05PolicyRawCommunicationUploadLimitKbps -PolicyRawData $rawSmb -Kbps $CommunicationUploadLimitKbps
+    }
 
     $rawLocal = New-Sa07LocalInOutFacetBlock
     $rawLocal += Set-Sa05PolicyRawRemainConnected -PolicyRawData $baseRaw
@@ -1215,7 +1245,8 @@ function Import-ScanAgentSa08CoreDebugPolicy {
         [string] $DestRoot = 'c:\test\SA-08-out',
         [int] $AgentPolicyWaitSec = 180,
         [int] $AgentDisconnectHoldSec = 5,
-        [int] $UiWaitMs = 120000
+        [int] $UiWaitMs = 120000,
+        [int] $CommunicationUploadLimitKbps = 0
     )
 
     $resolvedBase = Resolve-ScanAgentSa05PolicyBaseRaw `
@@ -1223,7 +1254,8 @@ function Import-ScanAgentSa08CoreDebugPolicy {
     $importBody = New-Sa08CorePolicyImportBody `
         -PolicyBaseRaw $resolvedBase.BaseRaw -PolicyTemplateXml '' `
         -TemplatePolicyName $TemplatePolicyName -PolicyName $PolicyName `
-        -SourceRoot $SourceRoot -DestRoot $DestRoot
+        -SourceRoot $SourceRoot -DestRoot $DestRoot `
+        -CommunicationUploadLimitKbps $CommunicationUploadLimitKbps
 
     $import = Invoke-ScanAgentCoreDebugHook -HookUrl $HookUrl -Command 'importpolicies' -BodyObject $importBody
     Assert-ScanAgentCoreDebugHookResponse -Response $import -Step 'importpolicies (SA-08)'
@@ -1265,13 +1297,15 @@ function Initialize-ScanAgentSa08CoreTestPolicy {
         [string] $TemplatePolicyName = '',
         [string] $PolicyName = 'Test8-abort',
         [int] $AgentPolicyWaitSec = 180,
-        [int] $UiWaitMs = 120000
+        [int] $UiWaitMs = 120000,
+        [int] $CommunicationUploadLimitKbps = 0
     )
 
     $pushed = Push-ScanAgentSa05CorePolicyState -CoreDebugHookUrl $CoreDebugHookUrl
     $imported = Import-ScanAgentSa08CoreDebugPolicy -HookUrl $pushed.HookUrl -Exe $Exe `
         -PolicyBaseRaw $PolicyBaseRaw -PolicyTemplateXml $PolicyTemplateXml -TemplatePolicyName $TemplatePolicyName `
-        -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs
+        -PolicyName $PolicyName -AgentPolicyWaitSec $AgentPolicyWaitSec -UiWaitMs $UiWaitMs `
+        -CommunicationUploadLimitKbps $CommunicationUploadLimitKbps
 
     return [pscustomobject]@{
         HookUrl          = $pushed.HookUrl
