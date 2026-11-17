@@ -3,6 +3,46 @@ Set-StrictMode -Version Latest
 
 $script:DirWatcherE2eCachedExePath = $null
 $script:DirWatcherE2eManagedByScenario = $false
+$script:DirWatcherE2eAgentStdoutLogPath = $null
+$script:DirWatcherE2eAgentStderrLogPath = $null
+
+function Remove-DirWatcherE2eAgentConsoleCaptureFiles {
+    foreach ($path in @($script:DirWatcherE2eAgentStdoutLogPath, $script:DirWatcherE2eAgentStderrLogPath)) {
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            continue
+        }
+
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $script:DirWatcherE2eAgentStdoutLogPath = $null
+    $script:DirWatcherE2eAgentStderrLogPath = $null
+}
+
+function Add-DirWatcherE2eAgentConsoleCaptureToEvidence {
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.List[string]] $EvidencePaths
+    )
+
+    foreach ($path in @($script:DirWatcherE2eAgentStdoutLogPath, $script:DirWatcherE2eAgentStderrLogPath)) {
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            continue
+        }
+
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+
+        $full = [System.IO.Path]::GetFullPath($path)
+        if (-not ($EvidencePaths -contains $full)) {
+            $EvidencePaths.Add($full) | Out-Null
+            Write-DwTestStep "DirWatcher console capture for evidence: $full"
+        }
+    }
+}
 
 function Register-DirWatcherE2eExePath {
     param([string] $ExePath)
@@ -155,6 +195,7 @@ function Stop-DirWatcherE2eProcessesForScenarioTeardown {
     Write-DwTestStep 'Teardown: stopping DirWatcher started for this scenario'
     Stop-DirWatcherE2eProcesses
     $script:DirWatcherE2eManagedByScenario = $false
+    Remove-DirWatcherE2eAgentConsoleCaptureFiles
 }
 
 function Start-DirWatcherE2eProcess {
@@ -166,12 +207,34 @@ function Start-DirWatcherE2eProcess {
     $full = Resolve-DirWatcherE2eExePath -Override $ExePath
     Write-DwTestStep "Starting DirWatcher: $full"
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $full
-    $psi.WorkingDirectory = [System.IO.Path]::GetDirectoryName($full)
-    $psi.UseShellExecute = $false
-    $psi.EnvironmentVariables['DIRWATCHER_ENABLE_DEBUG_INTERFACE'] = 'true'
-    [void][System.Diagnostics.Process]::Start($psi)
+    Remove-DirWatcherE2eAgentConsoleCaptureFiles
+
+    $captureId = [Guid]::NewGuid().ToString('N')
+    $script:DirWatcherE2eAgentStdoutLogPath = Join-Path $env:TEMP ("DirWatcher-E2E-$captureId.stdout.log")
+    $script:DirWatcherE2eAgentStderrLogPath = Join-Path $env:TEMP ("DirWatcher-E2E-$captureId.stderr.log")
+    Write-DwTestStep "DirWatcher console redirected (not echoed to test transcript): $($script:DirWatcherE2eAgentStdoutLogPath)"
+
+    $env:DIRWATCHER_ENABLE_DEBUG_INTERFACE = 'true'
+
+    $startParams = @{
+        FilePath               = $full
+        WorkingDirectory       = [System.IO.Path]::GetDirectoryName($full)
+        WindowStyle            = 'Hidden'
+        PassThru               = $true
+        RedirectStandardOutput = $script:DirWatcherE2eAgentStdoutLogPath
+        RedirectStandardError  = $script:DirWatcherE2eAgentStderrLogPath
+    }
+
+    $proc = Start-Process @startParams
+    if ($proc) {
+        try {
+            $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        }
+        catch {
+            # optional
+        }
+    }
+
     $script:DirWatcherE2eManagedByScenario = $true
 }
 
@@ -224,6 +287,7 @@ function Add-DirWatcherE2eFailureEvidenceIfEligible {
         }
     }
     Add-DirWatcherE2eDebugEvidencePaths -EvidencePaths $evidenceList
+    Add-DirWatcherE2eAgentConsoleCaptureToEvidence -EvidencePaths $evidenceList
     $dwLogDir = Get-DirWatcherE2eLogDirectory
     if ($dwLogDir -and -not ($evidenceList -contains $dwLogDir)) {
         $evidenceList.Add($dwLogDir) | Out-Null
@@ -431,6 +495,66 @@ function Wait-DirWatcherE2eTempContainsCopy {
     } while ($true)
 
     return $null
+}
+
+function Wait-DirWatcherE2eAllCleanOutputs {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CleanRoot,
+        [Parameter(Mandatory)]
+        [string[]] $FileNames,
+        [int] $TimeoutSec = 180,
+        [int] $PollMs = 500,
+        [int] $ProgressEverySec = 15
+    )
+
+    $expected = @($FileNames | ForEach-Object { [System.IO.Path]::GetFileName($_) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($expected.Count -eq 0) {
+        return @{}
+    }
+
+    $found = @{}
+    $cleanFull = [System.IO.Path]::GetFullPath($CleanRoot)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $nextProgressAt = [DateTimeOffset]::UtcNow.AddSeconds($ProgressEverySec)
+
+    Write-DwTestStep "Wait for $($expected.Count) clean output file(s) under $cleanFull (timeout ${TimeoutSec}s)"
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $cleanFull -PathType Container) {
+            $onDisk = Get-ChildItem -LiteralPath $cleanFull -File -Recurse -Force -ErrorAction SilentlyContinue
+            foreach ($name in $expected) {
+                if ($found.ContainsKey($name)) {
+                    continue
+                }
+
+                $match = $onDisk | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($null -ne $match) {
+                    $found[$name] = $match.FullName
+                }
+            }
+        }
+
+        if ($found.Count -eq $expected.Count) {
+            Write-DwTestStep "OK - all $($expected.Count) clean output file(s) present"
+            return $found
+        }
+
+        if ($ProgressEverySec -gt 0 -and [DateTimeOffset]::UtcNow -ge $nextProgressAt) {
+            $missing = @($expected | Where-Object { -not $found.ContainsKey($_) })
+            $sample = if ($missing.Count -gt 4) {
+                (($missing | Select-Object -First 4) -join ', ') + " (+$($missing.Count - 4) more)"
+            } else {
+                $missing -join ', '
+            }
+            Write-DwTestStep "Clean output progress: $($found.Count)/$($expected.Count) found; still waiting: $sample"
+            $nextProgressAt = [DateTimeOffset]::UtcNow.AddSeconds($ProgressEverySec)
+        }
+
+        Start-Sleep -Milliseconds $PollMs
+    }
+
+    return $found
 }
 
 function Wait-DirWatcherE2eCleanOutput {

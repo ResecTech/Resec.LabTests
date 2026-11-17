@@ -390,6 +390,86 @@ function Test-DirWatcherE2eIncomingTrackingIdle {
     return $true
 }
 
+function Test-DirWatcherE2eGlobalIngestIdle {
+    param(
+        $Tracking,
+        [switch] $RequireMapperIdle
+    )
+
+    if ($null -eq $Tracking) {
+        return $false
+    }
+
+    foreach ($counter in @('inFlightSourceCount', 'coreDestWriteInProgressCount')) {
+        $val = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name $counter
+        if ($null -ne $val -and [int]$val -gt 0) {
+            return $false
+        }
+    }
+
+    if ($RequireMapperIdle) {
+        foreach ($counter in @(
+                'finalOutcomeSideEffectsAppliedCount',
+                'tempFolderToOriginalPathMapperCount',
+                'autoReleasedSlotsCount',
+                'slotAcquiredAtCount'
+            )) {
+            $val = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name $counter
+            if ($null -ne $val -and [int]$val -gt 0) {
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
+function Format-DirWatcherE2eGlobalTrackingSummary {
+    param($Tracking)
+
+    if ($null -eq $Tracking) {
+        return '(no tracking.state response)'
+    }
+
+    $inFlight = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name 'inFlightSourceCount'
+    $destWrites = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name 'coreDestWriteInProgressCount'
+    $mapper = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name 'tempFolderToOriginalPathMapperCount'
+    $completed = Get-DirWatcherE2eTrackingProperty -Tracking $Tracking -Name 'completedOutputCount'
+    return "inFlight=$inFlight destWrites=$destWrites mapper=$mapper completedOutput=$completed"
+}
+
+function Wait-DirWatcherE2eGlobalIngestIdle {
+    param(
+        [string] $DebugBaseUrl = '',
+        [int] $TimeoutSec = 120,
+        [switch] $RequireMapperIdle,
+        [int] $ProgressEverySec = 15
+    )
+
+    Write-DwTestStep "Wait for global ingest idle (Core dest writes / in-flight cleared, timeout ${TimeoutSec}s)"
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $nextProgressAt = [DateTimeOffset]::UtcNow
+    $last = $null
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $last = Get-DirWatcherE2eTrackingState -BaseUrl $DebugBaseUrl
+        if (Test-DirWatcherE2eGlobalIngestIdle -Tracking $last -RequireMapperIdle:$RequireMapperIdle) {
+            Write-DwTestStep "OK - global ingest idle: $(Format-DirWatcherE2eGlobalTrackingSummary -Tracking $last)"
+            return $last
+        }
+
+        if ($ProgressEverySec -gt 0 -and [DateTimeOffset]::UtcNow -ge $nextProgressAt) {
+            Write-DwTestStep "Still waiting ingest idle: $(Format-DirWatcherE2eGlobalTrackingSummary -Tracking $last)"
+            $nextProgressAt = [DateTimeOffset]::UtcNow.AddSeconds($ProgressEverySec)
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    $detail = Format-DirWatcherE2eGlobalTrackingSummary -Tracking $last
+    throw "Timed out after ${TimeoutSec}s waiting for global ingest idle (Core SMB dest writes or in-flight sources). Last: $detail"
+}
+
 function Wait-DirWatcherE2eIncomingTrackingCleared {
     param(
         [Parameter(Mandatory)]

@@ -21,6 +21,7 @@ PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `
 | 4 | `P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1` | NCP-7361 - policy-blocked unknown fixture (`Fixtures\Blocked\NCP-7361\unknown-blocked.dat`) must land under **Rejected Folder** for behavior **0** (single folder) or **1** (by reason). Run behavior **1** explicitly: `-RejectedBehavior 1`. Script uses fixed 5s rejected / 2s clean waits (ignores Lab Test Runner timeout overrides). |
 | 5 | `P0\DW-05-NCP7376-SameFileTwiceFromIncomingRoot.ps1` | NCP-7376 — after first pass reaches clean SMB output, copying the **same file** to the **incoming root** again must be picked up (source clears; second sanitize outcome). |
 | 6 | `P0\DW-06-NCP7377-PeriodicFileCheckStopRegex.ps1` | NCP-7377 — periodic file check with **Process pre-existing files** off and **Periodic File Check Stop Regex** `.*\stop`; files under `stop` folders must not sanitize; files under a normal folder must still reach clean output. |
+| 7 | `P0\DW-08-NCP7385-BulkIncomingCompletesAfterCommDrop.ps1` | NCP-7385 — bulk drop into incoming; Core **agentcommblockon/off** during ingest; all files must reach clean output (needs **Resec.Agent.Gateway ≥ 26.2.107** with idle-connect fix). Default clean/ingest waits: **10s** each (`-CleanOutputTimeoutSec` / `-IngestIdleTimeoutSec` to override). |
 
 Example:
 
@@ -29,6 +30,7 @@ cd C:\Work\ResecTech\Resec.LabTests
 .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
 .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1
 .\DirWatcher\P0\DW-04-NCP7361-RejectedFileSavedOnFailure.ps1 -RejectedBehavior 1
+.\DirWatcher\P0\DW-08-NCP7385-BulkIncomingCompletesAfterCommDrop.ps1
 ```
 
 For **version skew** regression (e.g. DW 26.2 + Core 26.1), deploy the trains under test, then run the same script — it does not pin versions; folder behavior is what it asserts.
@@ -38,3 +40,5 @@ For **version skew** regression (e.g. DW 26.2 + Core 26.1), deploy the trains un
 Tests import a lab policy via Core `importpolicies` (see `Common\DirWatcherE2eCorePolicy.ps1`), assign it to `dir_watcher`, restart DirWatcher (default), and wait for monitoring via DirWatcher **`connection.state`** on `/debug/hook` (fallback: `Monitoring folder:` in `C:\Resec\Logs\Directory Watcher`). Helpers: `Common\DirWatcherE2eAgentDebug.ps1` (`connection.state`, **`tracking.state`** with optional `message=<path>` for processed/in-flight/completed-output and mapper counts). Optional `-UseAgentCommNudge` runs Core `agentcommblockon/off` instead of relying on restart alone.
 
 When a scenario **starts or restarts** DirWatcher (headless, no console), **`finally` teardown stops that process** so orphaned `DirWatcher.exe` instances do not linger. If DirWatcher was **already running** before the script began, teardown leaves it alone. Use **`-LeaveDirWatcherRunning`** to keep a scenario-started instance running for manual follow-up.
+
+Scenario-started DirWatcher **stdout/stderr are redirected** to `%TEMP%\DirWatcher-E2E-*.log` so bulk runs do not flood the PowerShell transcript / Test Platform `runLog`. On failure, those capture files are attached to the evidence zip (not inlined into console output).
