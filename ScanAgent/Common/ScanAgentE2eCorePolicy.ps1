@@ -735,8 +735,9 @@ function Wait-ScanAgentGatewayConnected {
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
-    $reconnectNudged = $false
     $lastProgressLog = [DateTimeOffset]::MinValue
+    $lastReconnectNudge = [DateTimeOffset]::MinValue
+    $reconnectNudgeIntervalSec = 5
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         # Gateway connect is independent of UI spinner / source folder load — poll status first.
         $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
@@ -752,16 +753,15 @@ function Wait-ScanAgentGatewayConnected {
             $lastProgressLog = $now
         }
 
-        if ($NudgeReconnect -and -not $reconnectNudged) {
-            $reconnectNudged = $true
+        # QA policies often ship Remain connected off — idle disconnect does not auto-reconnect; repeat header reconnect (ui.invoke reconnect).
+        if ($NudgeReconnect -and ($now - $lastReconnectNudge).TotalSeconds -ge $reconnectNudgeIntervalSec) {
+            $lastReconnectNudge = $now
             try {
                 Invoke-ScanAgentDebugReconnect -Exe $Exe | Out-Null
             }
             catch {
-                Write-Warning "Reconnect nudge returned before gateway was up ($Context); continuing gateway.status poll. $($_.Exception.Message)"
+                Write-Warning "Reconnect nudge did not connect yet ($Context); continuing gateway.status poll. $($_.Exception.Message)"
             }
-            Start-Sleep -Milliseconds 500
-            continue
         }
 
         Start-Sleep -Milliseconds $PollMs
@@ -1068,9 +1068,22 @@ function Wait-ScanAgentPolicyListContainsNames {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
     $expected = @($PolicyNames | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 
+    $lastReconnectNudge = [DateTimeOffset]::MinValue
+    $reconnectNudgeIntervalSec = 5
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $gateway = Invoke-ScanAgentDebugJson -Exe $Exe -Arguments @('gateway.status')
         if ($gateway.ok -ne $true -or $gateway.isConnected -ne $true) {
+            $now = [DateTimeOffset]::UtcNow
+            if (($now - $lastReconnectNudge).TotalSeconds -ge $reconnectNudgeIntervalSec) {
+                $lastReconnectNudge = $now
+                try {
+                    Invoke-ScanAgentDebugReconnect -Exe $Exe | Out-Null
+                }
+                catch {
+                    # Remain connected off: policy.list needs a live session; keep nudging until connected.
+                }
+            }
+
             Start-Sleep -Milliseconds $PollMs
             continue
         }
