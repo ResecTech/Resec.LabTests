@@ -27,7 +27,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 | **Verify WMC** | WebMC → **Mail sanitizations** (or Sanitizations): find message by time/subject; check **Status**, **Policy**, outcome. |
 | **Verify agent online** | WebMC → **Deployments** (or Connected agents): mail deployment **Connected**; optional debug `status` → `coreConnectionStatus` = `Authenticated`, `inboundSmtpListening` = true. |
 | **Check temp folders** | `GET http://127.0.0.1:4505/debug/hook?command=status` → `tempFolderRoot` + `tempFolderFileCounts`; or list subfolders under temp (see table below). |
-| **Core commdown** | `POST https://localhost:4504/debug/hook?command=agentcommblockon` (hold N seconds) then `agentcommblockoff` — see `CoreE2eDebugHook.ps1`. Or run `Mail/P0/MA-01-NCP7307-ReconnectOutboundDelivery.ps1`. |
+| **Core commdown** | `GET https://localhost:4504/debug/hook?command=agentcommblockon` (hold N seconds) then `agentcommblockoff` — or run `Mail/P0/MA-01-SmokeAndInbound.ps1` (step **F1**; add `-IncludeMa02CLongCommdown` for MA-02 **C** long hold). |
 | **Change mail policy** | WebMC → edit assigned mail policy → **Save**; watch agent log once for apply (no endless repeat). For SIR, CDR, per-recipient, filters: change facet → save → send test mail. |
 | **Listen port check** | PowerShell `Test-NetConnection -ComputerName localhost -Port <smtpPort>` or external monitor script; repeat every few minutes. |
 
@@ -38,7 +38,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 - **P0** — every mail-agent build (~3 sessions; ~2h).
 - **P1** — before customer release or when touching SMTP, spool, Gateway, relay, policy, filters, health.
 - **P2** — version skew / multi-Core registry occasionally.
-- **Automated:** `Mail/P0/MA-01-NCP7307-ReconnectOutboundDelivery.ps1` = **MA-02 C** only.
+- **Automated:** `Mail/P0/MA-01-SmokeAndInbound.ps1` — **MA-01** substeps **A–E** and **F1**; **MA-02 C** long commdown via `-IncludeMa02CLongCommdown`. **F2**, **F3**, **G**, **H** need WMC/lab prep (see script switches).
 
 ---
 
@@ -74,15 +74,28 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 
 ## Fixtures (one kit)
 
+Paths are under `Resec.LabTests\Fixtures\` unless noted.
+
 | Batch | Contents |
 |-------|----------|
-| Positive | `clean-sample` + PDF/DOCX in `E2eAttach`; multi-recipient `.eml`; large pptx |
-| Negative | EICAR, deny-hash, blocked extension, empty sender, `MAIL FROM:<>` |
+| Positive | `Mail\E2eAttach\clean-sample.txt`, `minimal-inbound.eml`; `Office\NCP-7344\simple.docx` (step **B** DOCX; PDF optional — add `Mail\E2eAttach\*.pdf` or use an Allowed/CDR PDF when policy permits) |
+| Negative | `Blocked\Infected\eicar.b65` (step **D**); policy **deny-hash** needs a named hash rule + matching file (not in repo — add under `Blocked\` or document hash); `Blocked\FileTypeNotAllowed\sigcheck.exe` for block-by-type; step **E** uses raw SMTP `MAIL FROM:<>` |
 | Edge | SPF-fail send path; regex/LDAP policy snippets documented in lab wiki |
 | Portal | Password-protected zip |
 | Infra | Dual next hop in policy; TLS relay; Core debug for commdown |
 
 Policy toggles for session: SIR on/off, CDR, per-recipient, filters (MA-13), recording (MA-14).
+
+### MA-01 automation (`Mail/P0/MA-01-SmokeAndInbound.ps1`)
+
+| Item | Requirement |
+|------|----------------|
+| Core | `EnableDebugInterface` = true; steps **F1** use `agentcommblockon/off` |
+| Mail agent | `EnableDebugInterface` = true on **:4505** (temp folders, step **A**) |
+| Policy | Next hop → SimpleMailServer **:26**; step **B**: **Send Immediate Response** = off → run with `-ConfirmSirOffForStepB` |
+| Tools | `MAIL_E2E_*_EXE` or `C:\Resec\Mail Test Tools\` builds |
+| WMC REST | Optional; default `resec_admin` / `resec_admin` for step **B** Pass check |
+| Manual / skipped | **F2** spool cap, **F3** bad relay, **G** SIR on, **H** per-recipient — enable switches when lab is prepped (script logs **SKIP** until then) |
 
 ### Temp folder check (after deliver)
 

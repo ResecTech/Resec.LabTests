@@ -1,5 +1,7 @@
 # REST API lab E2E
 
+Minimal manual test plan: [RA-minimal-functional-testplan.md](./RA-minimal-functional-testplan.md) (P0–P2, v2 + v3 Swagger, Jira/GitHub regression map).
+
 | Script | Ticket | What it checks |
 |--------|--------|----------------|
 | `P0\RA-01-NCP7372-RegistryCoreEndpoint.ps1` | NCP-7372 | HKLM `ServerAddress` → Gateway connect log + `api/v2/IsConnected` (single machine, Core local) |
