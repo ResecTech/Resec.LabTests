@@ -53,4 +53,20 @@ See `Resec.Core.Server/docs/core-debug-api.md`. Scripts use `commdown` / `commup
 
 ## Mail agent debug
 
-When `EnableDebugInterface` is enabled, `GET http://127.0.0.1:4505/debug/hook?command=<name>` supports `version`, `logpath`, `exepath`, `status`, and `exit`. The `status` command includes Gateway connectivity: `coreConnectionStatus` (`Disconnected` / `Connected` / `Authenticated`), `coreConnecting`, `coreSessionPhase`, plus `coreConnected` (authenticated ready). E2E helpers live in `MailAgentE2eMailAgentDebug.ps1` (`Ensure-MailAgentE2eProcessRunning`, `Wait-MailAgentDebugReady`, `Wait-MailAgentDebugReconnect` after Core `commup`, staging folder from `status.tempFolderRoot`, failure evidence from `logpath`).
+When `EnableDebugInterface` is enabled, `GET` or `POST` `http://127.0.0.1:4505/debug/hook` accepts a **canonical** `command` (case-insensitive). Discover names with `command=commands`.
+
+| # | Command | Notes |
+|---|---------|-------|
+| 1 | `commands` | List supported canonical ops |
+| 2 | `version` | Agent + Gateway versions |
+| 3 | `logpath` | Active log folder and file |
+| 4 | `exepath` | Running executable path |
+| 5 | `status` | E2E readiness (Gateway, SMTP listener, counts) |
+| 6 | `stats` | `MailOperationalMetrics` snapshot + health checks |
+| 7 | `logmark` | Requires `message` (query or JSON body); log line `DEBUG: E2E logmark: …` |
+| 8 | `overload` | Lab-only: `mode=off\|spoolfull\|spoolcap\|sessions\|processing` (`maxMessages` with `spoolcap`) |
+| 9 | `exit` | Schedule process exit |
+
+Legacy aliases (`ver`, `logfile`, `getstatus`, `stop`, …) are **not** supported.
+
+The `status` command includes Gateway connectivity: `coreConnectionStatus` (`Disconnected` / `Connected` / `Authenticated`), `coreConnecting`, `coreSessionPhase`, plus `coreConnected` (authenticated ready). E2E helpers live in `MailAgentE2eMailAgentDebug.ps1` (`Ensure-MailAgentE2eProcessRunning`, `Wait-MailAgentDebugReady`, `Wait-MailAgentDebugReconnect`, `Add-MailAgentE2eLogMark`, `Set-MailAgentDebugOverload`, staging folder from `status.tempFolderRoot`, failure evidence from `logpath`).

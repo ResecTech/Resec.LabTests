@@ -19,20 +19,64 @@ function Invoke-MailAgentDebugHook {
     param(
         [Parameter(Mandatory)]
         [string] $Command,
-        [string] $BaseUrl = ''
+        [string] $BaseUrl = '',
+        [string] $Message = '',
+        [string] $Mode = '',
+        [int] $MaxMessages = -1,
+        [hashtable] $BodyObject = $null,
+        [ValidateSet('Get', 'Post')]
+        [string] $Method = ''
     )
 
     $root = Get-MailAgentDebugBaseUrl -Override $BaseUrl
-    $uri = '{0}/debug/hook?command={1}' -f $root, [Uri]::EscapeDataString($Command)
+    $usePost = $Method -eq 'Post'
+    if ([string]::IsNullOrWhiteSpace($Method)) {
+        $usePost = ($null -ne $BodyObject) -or (-not [string]::IsNullOrWhiteSpace($Message)) -or `
+            (-not [string]::IsNullOrWhiteSpace($Mode)) -or ($MaxMessages -ge 0)
+    }
+
+    $queryParts = @('command=' + [Uri]::EscapeDataString($Command))
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $queryParts += 'message=' + [Uri]::EscapeDataString($Message)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+        $queryParts += 'mode=' + [Uri]::EscapeDataString($Mode)
+    }
+    if ($MaxMessages -ge 0) {
+        $queryParts += 'maxMessages=' + [Uri]::EscapeDataString([string]$MaxMessages)
+    }
+
+    $uri = if ($usePost) { '{0}/debug/hook' -f $root } else { '{0}/debug/hook?{1}' -f $root, ($queryParts -join '&') }
+    $body = $null
+    if ($usePost) {
+        if ($null -ne $BodyObject) {
+            $body = $BodyObject | ConvertTo-Json -Compress
+        }
+        else {
+            $payload = @{ command = $Command }
+            if (-not [string]::IsNullOrWhiteSpace($Message)) { $payload.message = $Message }
+            if (-not [string]::IsNullOrWhiteSpace($Mode)) { $payload.mode = $Mode }
+            if ($MaxMessages -ge 0) { $payload.maxMessages = $MaxMessages }
+            $body = $payload | ConvertTo-Json -Compress
+        }
+    }
 
     $errors = New-Object System.Collections.Generic.List[string]
     foreach ($attempt in @('rest', 'curl')) {
         try {
             if ($attempt -eq 'rest') {
+                if ($usePost) {
+                    return Invoke-RestMethod -Uri $uri -Method Post -Body $body -ContentType 'application/json' -UseBasicParsing
+                }
                 return Invoke-RestMethod -Uri $uri -Method Get -UseBasicParsing
             }
 
-            $curlJson = Invoke-MailAgentDebugHookViaCurl -Uri $uri
+            $curlJson = if ($usePost) {
+                Invoke-MailAgentDebugHookViaCurl -Uri $uri -Method Post -Body $body
+            }
+            else {
+                Invoke-MailAgentDebugHookViaCurl -Uri $uri
+            }
             if ($null -ne $curlJson) {
                 return $curlJson
             }
@@ -46,15 +90,55 @@ function Invoke-MailAgentDebugHook {
     throw "Mail agent debug hook failed (command=$Command, url=$root): $($errors -join '; '). $hint"
 }
 
+function Add-MailAgentE2eLogMark {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Message,
+        [string] $BaseUrl = ''
+    )
+
+    return Invoke-MailAgentDebugHook -Command 'logmark' -Message $Message -BaseUrl $BaseUrl
+}
+
+function Set-MailAgentDebugOverload {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('off', 'spoolfull', 'spoolcap', 'sessions', 'processing')]
+        [string] $Mode,
+        [string] $BaseUrl = '',
+        [int] $MaxMessages = -1
+    )
+
+    $params = @{
+        Command  = 'overload'
+        Mode     = $Mode
+        BaseUrl  = $BaseUrl
+    }
+    if ($Mode -eq 'spoolcap' -and $MaxMessages -ge 0) {
+        $params.MaxMessages = $MaxMessages
+    }
+
+    return Invoke-MailAgentDebugHook @params
+}
+
 function Invoke-MailAgentDebugHookViaCurl {
-    param([Parameter(Mandatory)][string] $Uri)
+    param(
+        [Parameter(Mandatory)][string] $Uri,
+        [ValidateSet('Get', 'Post')]
+        [string] $Method = 'Get',
+        [string] $Body = ''
+    )
 
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if (-not $curl) {
         return $null
     }
 
-    $args = @('-sS', '--max-time', '10', $Uri)
+    $args = @('-sS', '--max-time', '10')
+    if ($Method -eq 'Post') {
+        $args += @('-X', 'POST', '-H', 'Content-Type: application/json', '--data', $Body)
+    }
+    $args += $Uri
     $output = & curl.exe @args 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "curl.exe failed (exit $LASTEXITCODE): $output"
