@@ -12,7 +12,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 
 ## Lab setup (once per session)
 
-1. Core running; `AppSettings:EnableDebugInterface` = true on Core (for policy import / commdown).
+1. Core running; `AppSettings:EnableDebugInterface` = true on Core (for policy import, `agentcommblock*`, and `dbsimulate*`).
 2. Mail agent Windows service (or E2E auto-start) registered in WMC as mail relay; note **inbound SMTP port** and **temp folder** from policy.
 3. Next hop points at **SimpleMailServer** capture port (default **127.0.0.1:26**) or customer relay lab equivalent.
 4. Set `RESEC_MAIL_AGENT_EXE_LOCATION`; dot-source `Resec.LabTests\Mail\Common\Initialize-MailAgentE2eToolPaths.ps1`.
@@ -28,6 +28,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 | **Verify agent online** | WebMC → **Deployments** (or Connected agents): mail deployment **Connected**; optional debug `status` → `coreConnectionStatus` = `Authenticated`, `inboundSmtpListening` = true. |
 | **Check temp folders** | `GET http://127.0.0.1:4505/debug/hook?command=status` → `tempFolderRoot` + `tempFolderFileCounts`; or list subfolders under temp (see table below). |
 | **Core commdown** | `GET https://localhost:4504/debug/hook?command=agentcommblockon` (hold N seconds) then `agentcommblockoff` — or run `Mail/P0/MA-01-SmokeAndInbound.ps1` (step **F1**; add `-IncludeMa02CLongCommdown` to chain `MA-02-C-NCP7307` long hold). |
+| **Core DB unavailable (lab)** | `dbsimulateon` / `dbsimulateoff` (or `Set-CoreE2eDatabaseSimulation`) — blocks EF connection open only; MA-02 **E** enables this for the listen soak. |
 | **Change mail policy** | WebMC → edit assigned mail policy → **Save**; watch agent log once for apply (no endless repeat). For SIR, CDR, per-recipient, filters: change facet → save → send test mail. |
 | **Listen port check** | PowerShell `Test-NetConnection -ComputerName localhost -Port <smtpPort>` or external monitor script; repeat every few minutes. |
 
@@ -39,6 +40,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 - **P1** — before customer release or when touching SMTP, spool, Gateway, relay, policy, filters, health.
 - **P2** — version skew / multi-Core registry occasionally.
 - **Automated:** `Mail/P0/MA-01-SmokeAndInbound.ps1` — **MA-01** substeps **A–E** and **F1**; **MA-02 C** long commdown via `-IncludeMa02CLongCommdown`. **F2**, **F3**, **G**, **H** need WMC/lab prep (see script switches).
+- **Automated:** `Mail/P0/MA-02-Resilience.ps1` — **MA-02** substeps **A–E** (use `-SkipStep*` for subsets). Step **C** calls `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1`. Standalone **C**: `Mail/P0/MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1`.
 
 ---
 
@@ -47,7 +49,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 | # | ID | Steps | Pass |
 |---|-----|-------|------|
 | 1 | MA-01 | **Smoke & inbound** —<br><br>**A.** **Do:** Start **Resec.Agent.Mail** service; tail `log-Resec.Agent.Mail-*.log`; open WebMC deployment for this agent. **Expect:** Log shows Gateway **Authenticated**; **one** policy-apply sequence (no repeating apply spam); `Test-NetConnection` to SMTP port succeeds; WebMC shows agent connected.<br><br>**B.** **Do:** Set policy **Send Immediate Response** = **off**. SMTP-send **clean-sample** + PDF/DOCX fixture from `E2eAttach` to agent; capture on SimpleMailServer; open sanitization in WMC. **Expect:** WMC **Pass**; Resec signature in body on capture; attachment opens; run **temp folder check** (all 0).<br><br>**C.** **Do:** Send **one message** with 2+ recipients (To + CC or BCC) in envelope and headers. **Expect:** Capture shows all recipients; WMC recipient list matches.<br><br>**D.** **Do:** SMTP-send **EICAR** or **deny-hash** / policy-blocked attachment fixture. **Expect:** Sending client receives **5xx** (note code); if upstream is M365-like, mail trace shows **no** endless **450** retries.<br><br>**E.** **Do:** SMTP-send fixtures for **empty MAIL FROM** and **`MAIL FROM:<>`** (null reverse-path). **Expect:** SMTP response documented in client/session log (reject or accept per policy); message not silently dropped.<br><br>**F.** **Do:** (1) With mail in flight, run Core **agentcommblockon** ~10s then off — note SMTP code to sender. (2) Fill spool/session cap (parallel sends or NCP-7395 **overload**). (3) Point next hop at bad host; send one mail. **Expect:** **451** during Core block; **452**/4xx when capped (completed SMTP reply, not disconnect); **421** or visible failure for bad relay.<br><br>**G.** **Do:** Set policy **Send Immediate Response** = **on**; save; send clean mail; watch client SMTP dialog and agent log. **Expect:** **250**/early success before delivery finishes; mail still on next hop; grep log for `SemaphoreFullException` = none; **temp folder check** = 0.<br><br>**H.** **Do:** Set policy **process each recipient separately** = **on**; save; send **multi-recipient** mail from step C again; compare WMC job count vs bulk mode. **Expect:** Behavior matches facet (multiple sanitizations or splits if configured); all recipients served; **temp folder check** = 0. | All **Expect** met. |
-| 2 | MA-02 | **Resilience** —<br><br>**A.** **Do:** Immediately after MA-01 **B** or **G**, run **Check temp folders** (debug `status` or Explorer). **Expect:** SanitizationInput, SanitizationOutput, SmtpInboundSpool = **0**; SmtpFailed = **0** (unless you later run MA-14).<br><br>**B.** **Do:** Send **5–10** mails quickly (`SendBulkAttachmentMail` or loop); during WMC **Running** states, **restart** mail agent Windows service once; wait until all show terminal status; check folders. **Expect:** No cluster of `OutcomeFailCommunicationFailed`; no persistent SanitizationOutput lock errors in log; folders **0** when idle.<br><br>**C.** **Do:** Run `Mail/P0/MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (or manual commdown ≤30s and ≥30s while SMTP sending). After script ends, **Check temp folders** and **Listen port check**. **Expect:** Inbound got **451** during outage; port still listening; mail delivered to capture after recovery; folders **0**.<br><br>**D.** **Do:** Restart **Core** service (or **agentcommblockon** ≥5 min) **without** restarting mail agent; after Core is up, send one clean mail. **Expect:** Mail delivers without you manually restarting mail agent; debug `status` returns Authenticated.<br><br>**E.** **Do:** During or after a **SQL/DB unavailable** window on Core (lab maintenance or simulated), every **5 min** for 15 min run **Listen port check** on agent SMTP port (do not restart agent). **Expect:** Port remains open; if it fails, log as failure (NCP-7217 class). | All **Expect** met. |
+| 2 | MA-02 | **Resilience** —<br><br>**A.** **Do:** With the mail agent idle, run **Check temp folders** (debug `status` or Explorer). **Expect:** SanitizationInput, SanitizationOutput, SmtpInboundSpool = **0**; SmtpFailed = **0** (unless you later run MA-14). *(Standalone step — not chained to MA-01.)*<br><br>**B.** **Do:** Send **5–10** mails quickly (`SendBulkAttachmentMail` or loop); wait until **at least some** sanitizations are non-terminal on Core (`GET /debug/hook?command=runningsanitizations&subjectContains=<burst prefix>`) or, without Core debug, agent-side in-flight signals (temp counts, `inboundSanitizationsInProgress`, SendBulk still sending). **Restart** mail agent Windows service **once** during that window; wait until the burst finishes; check folders. **Expect:** SendBulk completes without a stuck hang; agent returns **Authenticated** on debug `status`; no persistent SanitizationOutput lock errors in log; folders **0** when idle.<br><br>**C.** **Do:** Run `Mail/P0/MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (or manual commdown ≤30s and ≥30s while SMTP sending). After script ends, **Check temp folders** and **Listen port check**. **Expect:** Inbound got **451** during outage; port still listening; mail delivered to capture after recovery; folders **0**.<br><br>**D.** **Do:** Restart **Core** service (or **agentcommblockon** ≥5 min) **without** restarting mail agent; after Core is up, send one clean mail. **Expect:** Mail delivers without you manually restarting mail agent; debug `status` returns Authenticated.<br><br>**E.** **Do:** While Core **DB is unavailable** (`dbsimulateon` in automation, or real SQL maintenance), every **5 min** for 15 min run **Listen port check** on agent SMTP port (do not restart agent). **Expect:** Port remains open; if it fails, log as failure (NCP-7217 class). Script runs `dbsimulateoff` in `finally`. | All **Expect** met. |
 | 3 | MA-03 | **Outbound & capacity** —<br><br>**A.** **Do:** In mail policy, set next hop list: entry 1 = dead IP:25, entry 2 = working SimpleMailServer; save; send clean mail; then set **only** dead hops; send again. **Expect:** First mail on capture; second shows failure in WMC and agent log (DAD/timeout text), not missing row.<br><br>**B.** **Do:** Configure next hop hostname with **TLS + certificate validation** per policy; point at lab TLS relay; send mail. **Expect:** Delivered; agent log shows TLS (no cert bypass errors).<br><br>**C.** **Do:** Lower spool/session limits in `appsettings.json` **MailProcessing** (lab only) or use debug **overload**; open **20+ parallel** SMTP sessions or rapid sequential sends until reject. **Expect:** New sessions receive SMTP **4xx**/**452** within seconds; agent process stays up; after stopping load, next single mail **Pass**.<br><br>**D.** **Do:** After **C**, WebMC → **System Health** → expand Core → **Agents** → expand mail deployment; note spool/disk rows. **Expect:** Spool utilization and disk status plausible (e.g. not **Degraded** disk on large volume with plenty of free GB). | All **Expect** met. |
 
 ---
@@ -88,14 +90,27 @@ Policy toggles for session: SIR on/off, CDR, per-recipient, filters (MA-13), rec
 
 ### MA-01 automation (`Mail/P0/MA-01-SmokeAndInbound.ps1`)
 
-| Item | Requirement |
-|------|----------------|
-| Core | `EnableDebugInterface` = true; steps **F1** use `agentcommblockon/off` |
-| Mail agent | `EnableDebugInterface` = true on **:4505** (temp folders, step **A**) |
-| Policy | E2E scripts import lab policy (Send Immediate Response off, next hop **127.0.0.1:26**, `mail_agent`); `-SkipCorePolicySetup` to manage policy yourself |
-| Tools | `MAIL_E2E_*_EXE` or `C:\Resec\Mail Test Tools\` builds |
-| WMC REST | Optional; default `resec_admin` / `resec_admin` for step **B** Pass check |
-| Manual / skipped | **F2** spool cap, **F3** bad relay, **G** SIR on, **H** per-recipient — enable switches when lab is prepped (script logs **SKIP** until then) |
+| # | Item | Requirement |
+|---|------|----------------|
+| 1 | Core | `EnableDebugInterface` = true; steps **F1** use `agentcommblockon/off` |
+| 2 | Mail agent | `EnableDebugInterface` = true on **:4505** (temp folders, step **A**) |
+| 3 | Policy | E2E scripts import lab policy (Send Immediate Response off, next hop **127.0.0.1:26**, `mail_agent`); `-SkipCorePolicySetup` to manage policy yourself |
+| 4 | Tools | `MAIL_E2E_*_EXE` or `C:\Resec\Mail Test Tools\` builds |
+| 5 | WMC REST | Optional; default `resec_admin` / `resec_admin` for step **B** Pass check |
+| 6 | Manual / skipped | **F2** spool cap, **F3** bad relay, **G** SIR on, **H** per-recipient — enable switches when lab is prepped (script logs **SKIP** until then) |
+
+### MA-02 automation (`Mail/P0/MA-02-Resilience.ps1`)
+
+| # | Plan step | Script / helper |
+|---|-----------|-----------------|
+| 1 | **A** — idle temp (standalone baseline) | `Invoke-Ma02StepA` → `Assert-MailAgentE2eIdleTempFolders` |
+| 2 | **B** — 5–10 mails + restart while some still in flight | `Invoke-Ma02StepB`; `Wait-CoreE2eRunningSanitizationForSubject` (`runningsanitizations`); agent fallback `Wait-MailAgentE2eBurstInFlight`; restart service; idle temp folders |
+| 3 | **C** — commdown ≤30s / ≥30s, 451, capture, listen, temp **0** | Child `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (`-Ma02CScenarios` / `-Scenarios`) |
+| 4 | **D** — Core outage **without** agent restart; clean mail + **Authenticated** | `Invoke-Ma02StepD` — `agentcommblockon/off` hold (default **300s**, `-StepDCommdownHoldSeconds`) |
+| 5 | **E** — listen check every 5 min for 15 min | `Invoke-Ma02StepE` with Core `dbsimulateon` + `Invoke-MailAgentE2eListenPortSoak`; `-SkipCoreDatabaseSimulation` for listen-only |
+| 6 | Skipped steps | `-SkipStepA` … `-SkipStepE` |
+
+Helpers: `Mail/Common/MailAgentE2eMa02.ps1`, `Mail/Common/MailAgentE2eMailAgentDebug.ps1`. Service name: `MAIL_E2E_MAIL_AGENT_SERVICE_NAME`. Lab policy matches **MA-01**. MA-01 chain: `-IncludeMa02CLongCommdown` (long **C** only).
 
 ### Temp folder check (after deliver)
 

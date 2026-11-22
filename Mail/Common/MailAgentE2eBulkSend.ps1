@@ -331,7 +331,8 @@ function New-BulkSendAppsettings {
         [string] $SubjectPrefix = '',
         [int] $MinAttachmentsPerEmail = 1,
         [int] $MaxAttachmentsPerEmail = 1,
-        [int] $EmailCount = 1
+        [int] $EmailCount = 1,
+        [int] $MaxParallelSends = 1
     )
 
     $settings = [ordered]@{
@@ -356,7 +357,7 @@ function New-BulkSendAppsettings {
         MinAttachmentsPerEmail   = $MinAttachmentsPerEmail
         MaxAttachmentsPerEmail   = $MaxAttachmentsPerEmail
         EmailsPerHour            = 3600
-        MaxParallelSends         = 1
+        MaxParallelSends         = $MaxParallelSends
         EmailCount               = $EmailCount
         TestTimeMinutes          = 0
         PercentToAllRecipients   = 100
@@ -440,6 +441,36 @@ function Test-MailAgentE2eExpectedCommdownInbound451 {
 
     $blob = ($FailureDetail + ' ' + $StderrText + ' ' + $StdoutText).ToLowerInvariant()
     return ($blob -match '451') -or ($blob -match 'service unavailable') -or ($blob -match 'try again later')
+}
+
+function Assert-MailAgentE2eCommdownInbound451Observed {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable] $BulkJob,
+        [string] $FailureDetail = '',
+        [string] $Context = 'MA-02 C commdown',
+        [string] $MailAgentDebugUrl = '',
+        [int] $AgentLogTailLines = 600
+    )
+
+    $redirect = Read-MailAgentE2eBulkSendRedirectFiles -StdoutFile $BulkJob.StdoutFile -StderrFile $BulkJob.StderrFile
+    if (Test-MailAgentE2eExpectedCommdownInbound451 -FailureDetail $FailureDetail `
+            -StderrText $redirect.Stderr -StdoutText $redirect.Stdout) {
+        Write-Host "[INFO] $Context - inbound SMTP 451 (or equivalent) observed in SendBulk output."
+        return
+    }
+
+    $log = Get-MailAgentDebugLogPathEvidence -BaseUrl $MailAgentDebugUrl
+    if (-not [string]::IsNullOrWhiteSpace($log) -and (Test-Path -LiteralPath $log)) {
+        $tail = @(Get-Content -LiteralPath $log -Tail $AgentLogTailLines -ErrorAction SilentlyContinue)
+        $blob = ($tail -join [Environment]::NewLine).ToLowerInvariant()
+        if (($blob -match '\b451\b') -and ($blob -match 'smtp|inbound|service unavailable|try again')) {
+            Write-Host "[INFO] $Context - inbound SMTP 451 observed in mail agent log tail."
+            return
+        }
+    }
+
+    throw "$Context - expected inbound SMTP 451 during Core commdown on open session; not found in SendBulk output or agent log."
 }
 
 function Read-MailAgentE2eBulkSendRedirectFiles {

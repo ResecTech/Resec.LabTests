@@ -837,6 +837,81 @@ function Get-MailAgentE2eDesktopAgentProcesses {
     return $result.ToArray()
 }
 
+function Get-MailAgentE2eWindowsServiceName {
+    if (-not [string]::IsNullOrWhiteSpace($env:MAIL_E2E_MAIL_AGENT_SERVICE_NAME)) {
+        return $env:MAIL_E2E_MAIL_AGENT_SERVICE_NAME.Trim()
+    }
+
+    foreach ($svc in @(Get-Service -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -match '(?i)mail' -and $_.DisplayName -match '(?i)resec'
+        })) {
+        return [string]$svc.Name
+    }
+
+    return $null
+}
+
+function Restart-MailAgentE2eWindowsServiceOrProcess {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $MailAgentDebugUrl = '',
+        [string] $MailAgentExePath = '',
+        [int] $ExpectedInboundPort = 0,
+        [int] $StartupTimeoutSec = 90
+    )
+
+    $serviceName = Get-MailAgentE2eWindowsServiceName
+    if (-not [string]::IsNullOrWhiteSpace($serviceName)) {
+        Write-MailAgentE2eAutostartStep "Restarting mail agent Windows service '$serviceName' (MA-02 B)."
+        Restart-Service -Name $serviceName -Force -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        $null = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugUrl -ExpectedInboundPort $ExpectedInboundPort `
+            -TimeoutSec $StartupTimeoutSec
+        return
+    }
+
+    Write-Host '[WARN] Mail agent Windows service not found; restarting desktop Resec.Agent.Mail process (set MAIL_E2E_MAIL_AGENT_SERVICE_NAME for service-based labs).'
+    Stop-MailAgentE2eDesktopAgents -AgentExePath $MailAgentExePath
+    Start-Sleep -Seconds 2
+    $ensure = Ensure-MailAgentE2eProcessRunning -CallingScriptRoot $CallingScriptRoot -BaseUrl $MailAgentDebugUrl `
+        -MailAgentExePath $MailAgentExePath -ExpectedInboundPort $ExpectedInboundPort `
+        -StartupTimeoutSec $StartupTimeoutSec
+    if (-not $ensure.Process) {
+        throw 'MA-02 B: could not restart mail agent after process stop.'
+    }
+}
+
+function Invoke-MailAgentE2eListenPortSoak {
+    param(
+        [string] $ComputerName = '127.0.0.1',
+        [Parameter(Mandatory)]
+        [int] $Port,
+        [string] $BaseUrl = '',
+        [int] $TotalMinutes = 15,
+        [int] $IntervalMinutes = 5,
+        [string] $Context = 'MA-02 E',
+        [string] $CoreDebugHookUrl = ''
+    )
+
+    if ($IntervalMinutes -le 0) {
+        $IntervalMinutes = 5
+    }
+
+    $checks = [Math]::Max(1, [int][Math]::Floor($TotalMinutes / $IntervalMinutes) + 1)
+    for ($i = 0; $i -lt $checks; $i++) {
+        if ($i -gt 0) {
+            Start-Sleep -Seconds ($IntervalMinutes * 60)
+        }
+        Write-MailAgentE2eAutostartStep "$Context listen check $($i + 1)/$checks (${ComputerName}:$Port)."
+        Assert-MailAgentE2eInboundSmtpPortListening -ComputerName $ComputerName -Port $Port -BaseUrl $BaseUrl `
+            -Context "$Context check $($i + 1)"
+        if (-not [string]::IsNullOrWhiteSpace($CoreDebugHookUrl)) {
+            Assert-CoreE2eDatabaseSimulationActive -HookUrl $CoreDebugHookUrl -Context "$Context check $($i + 1) dbsimulate"
+        }
+    }
+}
+
 function Stop-MailAgentE2eDesktopAgents {
     param(
         [string] $AgentExePath = ''
@@ -1017,6 +1092,80 @@ function Get-MailAgentE2eOnDiskTempFileCount {
         Get-ChildItem -LiteralPath $FolderPath -File -Force -ErrorAction SilentlyContinue |
             Where-Object { -not $_.Name.EndsWith('.tmp', [System.StringComparison]::OrdinalIgnoreCase) }
     ).Count
+}
+
+function Test-MailAgentE2eStatusShowsInFlightSanitization {
+    param($Status)
+
+    if ($null -eq $Status) {
+        return $false
+    }
+
+    if ($null -ne $Status.PSObject.Properties['inboundSanitizationsInProgress']) {
+        if ([int]$Status.inboundSanitizationsInProgress -gt 0) {
+            return $true
+        }
+    }
+
+    if ($null -ne $Status.PSObject.Properties['openInboundSmtpSessions']) {
+        if ([int]$Status.openInboundSmtpSessions -gt 0) {
+            return $true
+        }
+    }
+
+    $counts = $Status.tempFolderFileCounts
+    if ($null -ne $counts) {
+        foreach ($name in @('SanitizationInput', 'SanitizationOutput', 'SmtpInboundSpool')) {
+            $prop = $counts.PSObject.Properties[$name]
+            if ($null -ne $prop -and [int]$prop.Value -gt 0) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Wait-MailAgentE2eBurstInFlight {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [int] $TimeoutSec = 90,
+        [int] $PollSec = 2,
+        [string] $Context = 'MA-02 B'
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+        if (Test-MailAgentE2eStatusShowsInFlightSanitization -Status $status) {
+            Write-Host "[INFO] $Context - in-flight work observed: $(Format-MailAgentDebugStatusSummary -Status $status)"
+            return $status
+        }
+        Start-Sleep -Seconds $PollSec
+    }
+
+    throw "$Context - no in-flight sanitization observed within ${TimeoutSec}s (agent debug status); cannot time agent restart on active load."
+}
+
+function Assert-MailAgentE2eInboundSmtpPortListening {
+    param(
+        [string] $ComputerName = '127.0.0.1',
+        [Parameter(Mandatory)]
+        [int] $Port,
+        [string] $BaseUrl = '',
+        [string] $Context = 'inbound SMTP listen port check'
+    )
+
+    $tn = Test-NetConnection -ComputerName $ComputerName -Port $Port -WarningAction SilentlyContinue
+    if (-not $tn.TcpTestSucceeded) {
+        throw "$Context - Test-NetConnection to ${ComputerName}:${Port} failed."
+    }
+
+    $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+    if ($status.inboundSmtpListening -ne $true) {
+        throw "$Context - debug status inboundSmtpListening=false. $(Format-MailAgentDebugStatusSummary -Status $status)"
+    }
 }
 
 function Assert-MailAgentE2eIdleTempFolders {

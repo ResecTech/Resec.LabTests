@@ -66,7 +66,9 @@ param(
     [switch] $SkipStartMailAgent,
     [switch] $SkipCorePolicySetup,
     [string] $MailRelayName = '',
-    [string] $CoreDebugHookUrl = ''
+    [string] $CoreDebugHookUrl = '',
+    [switch] $SkipRestoreCorePolicy,
+    [switch] $SkipScenarioProcessTeardown
 )
 
 Set-StrictMode -Version Latest
@@ -187,7 +189,15 @@ function Invoke-Ma01ReconnectScenario {
         Write-TestStep ("Reconnected: {0}" -f (Format-MailAgentDebugStatusSummary -Status $reconnected))
 
         Write-TestStep 'Waiting for SendBulkAttachmentMail to finish.'
-        $bulkReport = Complete-BulkSendOnce -BulkJob $bulkJob -WaitExitTimeoutSec $DeliveryTimeoutSec -AllowExpectedCommdown451
+        $bulkReport = Complete-BulkSendOnce -BulkJob $bulkJob -WaitExitTimeoutSec $DeliveryTimeoutSec -AllowExpectedCommdown451 `
+            -ProgressLabel $Scenario.TestId -MailAgentDebugUrl $MailAgentDebugBaseUrl -ProgressIntervalSec 5 `
+            -E2eTestId $Scenario.TestId -CoreDebugHookUrl $script:CoreDebugHookUrl -EmitLogMarks
+        $bulkFailureDetail = $null
+        if ($null -ne $bulkReport -and $null -ne $bulkReport.failedMessages -and @($bulkReport.failedMessages).Count -gt 0) {
+            $bulkFailureDetail = [string]@($bulkReport.failedMessages)[0].detail
+        }
+        Assert-MailAgentE2eCommdownInbound451Observed -BulkJob $bulkJob -FailureDetail $bulkFailureDetail `
+            -Context "[$($Scenario.TestId)] MA-02 C inbound 451 during commdown" -MailAgentDebugUrl $MailAgentDebugBaseUrl
         if ($null -ne $bulkReport -and -not [string]::IsNullOrWhiteSpace([string]$bulkReport.subjectPrefix)) {
             $expectedSubject = '{0}-1' -f [string]$bulkReport.subjectPrefix
         }
@@ -204,6 +214,13 @@ function Invoke-Ma01ReconnectScenario {
         Wait-MailAgentDebugSanitizationOutputEmpty -BaseUrl $MailAgentDebugBaseUrl `
             -TimeoutSec $SanitizationOutputEmptyTimeoutSec `
             -Context "[$($Scenario.TestId)] SanitizationOutput must be empty after successful outbound delivery" | Out-Null
+
+        $repaired = Repair-MailAgentE2eOrphanInboundTempWhenIdle -BaseUrl $MailAgentDebugBaseUrl `
+            -Context "[$($Scenario.TestId)] after delivery"
+        $idleWaitSec = if ($repaired) { 30 } else { 60 }
+        Write-TestStep "MA-02 C: idle temp folder check (plan step C; up to ${idleWaitSec}s)."
+        $null = Wait-MailAgentE2eIdleTempFolders -BaseUrl $MailAgentDebugBaseUrl -TimeoutSec $idleWaitSec `
+            -Context "[$($Scenario.TestId)] MA-02 C after delivery"
 
         $scenarioPassed = $true
     }
@@ -317,9 +334,10 @@ try {
 
     if ($script:PolicyStackPushed) {
         Write-TestStep 'Core: wait for lab policy on mail agent (agentcomm nudge only if first connect stalls).'
-        Ensure-MailAgentE2eLabPolicyOnAgent -BaseUrl $MailAgentDebugBaseUrl -HookUrl $script:CoreDebugHookUrl
+        Ensure-MailAgentE2eLabPolicyOnAgent -BaseUrl $MailAgentDebugBaseUrl -HookUrl $script:CoreDebugHookUrl -TestId 'MA-02-C'
         $agentStatus = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugBaseUrl -ExpectedInboundPort $InboundSmtpPort
         Write-TestStep ("Mail agent after policy apply: {0}" -f (Format-MailAgentDebugStatusSummary -Status $agentStatus))
+        Assert-MailAgentE2ePolicyFromAgentLog -BaseUrl $MailAgentDebugBaseUrl -NextHopHost $SimpleMailListenHost -NextHopPort $SimpleMailPort
     }
 
     $tempRoot = Get-EffectiveMailTempFolder -MailAgentDebugUrl $MailAgentDebugBaseUrl
@@ -361,6 +379,12 @@ try {
             -CaptureFolder $CaptureSaveFolder | Out-Null
         $scenarioIndex++
     }
+
+    Write-TestStep "MA-02 C post-run: listen port check ($InboundSmtpServer`:$InboundSmtpPort)."
+    Assert-MailAgentE2eInboundSmtpPortListening -ComputerName $InboundSmtpServer -Port $InboundSmtpPort `
+        -BaseUrl $MailAgentDebugBaseUrl -Context 'MA-02 C after scenarios'
+    Write-TestStep 'MA-02 C post-run: idle temp folder check (SanitizationInput/Output/SmtpInboundSpool/SmtpFailed = 0).'
+    Assert-MailAgentE2eIdleTempFolders -BaseUrl $MailAgentDebugBaseUrl -Context 'MA-02 C after scenarios'
 }
 catch {
     $script:OverallPassed = $false
@@ -368,7 +392,7 @@ catch {
     throw
 }
 finally {
-    if ($script:PolicyStackPushed -and $script:CoreDebugHookUrl) {
+    if ($script:PolicyStackPushed -and $script:CoreDebugHookUrl -and -not $SkipRestoreCorePolicy) {
         try {
             Write-TestStep 'Core: poppolicystate'
             Restore-MailAgentE2eLabCorePolicy -HookUrl $script:CoreDebugHookUrl
@@ -378,7 +402,7 @@ finally {
         }
     }
 
-    if ($simpleMailStartedByScript -and $simpleMailProcess -and -not $simpleMailProcess.HasExited) {
+    if (-not $SkipScenarioProcessTeardown -and $simpleMailStartedByScript -and $simpleMailProcess -and -not $simpleMailProcess.HasExited) {
         try {
             Stop-Process -Id $simpleMailProcess.Id -Force -ErrorAction SilentlyContinue
         }
@@ -386,7 +410,7 @@ finally {
         }
     }
 
-    if ($mailAgentStartedByScript -and $mailAgentProcess -and -not $mailAgentProcess.HasExited) {
+    if (-not $SkipScenarioProcessTeardown -and $mailAgentStartedByScript -and $mailAgentProcess -and -not $mailAgentProcess.HasExited) {
         try {
             Write-TestStep "Stopping mail agent started by MA-02-C (pid=$($mailAgentProcess.Id))."
             Stop-Process -Id $mailAgentProcess.Id -Force -ErrorAction SilentlyContinue

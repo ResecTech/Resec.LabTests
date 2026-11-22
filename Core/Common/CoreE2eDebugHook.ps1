@@ -89,6 +89,7 @@ function Invoke-CoreE2eDebugHook {
         [string] $Command,
         [hashtable] $BodyObject,
         [string] $Message,
+        [string] $SubjectContains,
         [int] $TimeoutSec = 300
     )
 
@@ -109,9 +110,90 @@ function Invoke-CoreE2eDebugHook {
     if (-not [string]::IsNullOrWhiteSpace($Message)) {
         $queryParts += 'message=' + [uri]::EscapeDataString($Message)
     }
+    if (-not [string]::IsNullOrWhiteSpace($SubjectContains)) {
+        $queryParts += 'subjectContains=' + [uri]::EscapeDataString($SubjectContains)
+    }
 
     $uri = '{0}{1}{2}' -f $HookUrl, $separator, ($queryParts -join '&')
     return Invoke-CoreE2eRestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+}
+
+function Get-CoreE2eRunningSanitizations {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $SubjectContains = '',
+        [int] $TimeoutSec = 60
+    )
+
+    return Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'runningsanitizations' `
+        -SubjectContains $SubjectContains -TimeoutSec $TimeoutSec
+}
+
+function Wait-CoreE2eRunningSanitizationForSubject {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $SubjectPrefix,
+        [int] $MinCount = 1,
+        [int] $TimeoutSec = 90,
+        [int] $PollSec = 2,
+        [string] $Context = 'Core running sanitizations'
+    )
+
+    if ($MinCount -lt 1) {
+        $MinCount = 1
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $response = Get-CoreE2eRunningSanitizations -HookUrl $HookUrl -SubjectContains $SubjectPrefix
+        Assert-CoreE2eDebugHookResponse -Response $response -Step "$Context (runningsanitizations)"
+        $rows = @($response.runningSanitizations)
+        if ($rows.Count -ge $MinCount) {
+            Write-Host "[INFO] $Context - $($rows.Count) non-terminal sanitization(s) matching '$SubjectPrefix'."
+            return $response
+        }
+        Start-Sleep -Seconds $PollSec
+    }
+
+    throw "$Context - expected at least $MinCount running sanitization(s) with subject/file matching '$SubjectPrefix' within ${TimeoutSec}s."
+}
+
+function Set-CoreE2eDatabaseSimulation {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [bool] $SimulateOffline
+    )
+
+    $command = if ($SimulateOffline) { 'dbsimulateon' } else { 'dbsimulateoff' }
+    $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command $command
+    $label = if ($SimulateOffline) { 'on' } else { 'off' }
+    Assert-CoreE2eDebugHookResponse -Response $response -Step "database simulation $label"
+    if ($response.PSObject.Properties.Name -contains 'databaseSimulationActive') {
+        $active = $response.databaseSimulationActive -eq $true
+        if ($SimulateOffline -ne $active) {
+            throw "Core debug hook database simulation $label failed: databaseSimulationActive=$active (expected $SimulateOffline)."
+        }
+    }
+    return $response
+}
+
+function Assert-CoreE2eDatabaseSimulationActive {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $Context = 'database simulation'
+    )
+
+    $status = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'dbsimulatestatus'
+    Assert-CoreE2eDebugHookResponse -Response $status -Step "$Context (dbsimulatestatus)"
+    if ($status.databaseSimulationActive -ne $true) {
+        throw "$Context : Core dbsimulate is not active (databaseSimulationActive=$($status.databaseSimulationActive))."
+    }
 }
 
 function Set-CoreE2eSanitizationProcessingDelay {

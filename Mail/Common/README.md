@@ -55,11 +55,11 @@ MA-01 (and MA-02-C) **push / import / pop** a lab Core policy via `/debug/hook`:
 1. Core running with `AppSettings:EnableDebugInterface` = `True`.
 2. Mail agent registered as relay **mail** (override `MAIL_E2E_RELAY_NAME`). Lab policy import sets **Email Agent Settings** (`StrPropType_ScannedFileEmailLocationRelayComputer`) for the export destination and **Relay Settings** (`StrPropType_RelayName` on the `Relay Settings` facet) so Core registers the connected mail agent and uses direct PutFile instead of a 300s RabbitMQ relay wait. Stop **Resec.Agent.ScanAgent** during MA-01 when possible (Scan Agent cannot process mail PutFile messages). MA-01 logs a **warning** if it is running; use `-FailOnRunningScanAgent` to fail fast. E2E scripts set next hop → SimpleMailServer port (default **26**) via lab policy import. MA-01 **auto-starts** `Resec.Agent.Mail.exe` when the debug hook is down (sets `EnableDebugInterface` in appsettings next to the exe). Use `-SkipStartMailAgent` or `MAILAGENT_E2E_NO_AUTOSTART=1` to require a pre-running agent.
 3. Build **SimpleMailServer** (`Resec.LabTests\Tools\SimpleMailServer`) and **SendBulkAttachmentMail** (Mail repo), or use publish single-file outputs.
-4. `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` starts (or verifies) **SimpleMailServer.exe --cli** on the capture port (default **127.0.0.1:26**), then runs **two** scenarios: short commdown hold (default **10s**, TestId `MA-02-C-Short`) and long hold (default **30s**, `MA-02-C-Long`). Use `-Scenarios Short|Long|All` to filter; tune holds via `-ShortCommDownHoldSeconds` / `-LongCommDownHoldSeconds`.
+4. **MA-02** full gate: `Mail/P0/MA-02-Resilience.ps1` (**A–E**; `-SkipStep*`). Step **C** only: `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (short/long commdown, **451**, capture, temp folders). See `MA-minimal-functional-testplan.md` **MA-02 automation** table. Step **A** is standalone (not after MA-01). Step **D** default Core hold **300s**; step **E** Core **`dbsimulateon`** during inbound listen soak **15m** (`Set-CoreE2eDatabaseSimulation`; `-SkipCoreDatabaseSimulation` for listen-only).
 
 ## Core debug
 
-See `Resec.Core.Server/docs/core-debug-api.md`. Scripts use `commdown` / `commup` during outbound staging.
+See `Resec.Core.Server/docs/core-debug-api.md`. MA-02 **C** / **D** use **`agentcommblockon`** / **`agentcommblockoff`**; MA-02 **E** uses **`dbsimulateon`** / **`dbsimulateoff`** (EF DB-unavailable simulation; SQL Server keeps running). Helper: `Set-CoreE2eDatabaseSimulation` in `Core/Common/CoreE2eDebugHook.ps1`.
 
 ## Mail agent debug
 
