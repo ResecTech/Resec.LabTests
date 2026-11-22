@@ -40,6 +40,14 @@ To discover built tools on the current machine and set the session variables:
 
 Use `-Force` to replace variables that are already set. Implementation: `MailAgentE2ePaths.ps1` (`Set-MailAgentE2eToolEnvironment`).
 
+## MA-01 smoke and inbound
+
+```powershell
+.\Mail\P0\MA-01-SmokeAndInbound.ps1 -ConfirmSirOffForStepB
+```
+
+Policy **Send Immediate Response** must be **off** for step B; build **SendEml.exe** as well as SendBulkAttachmentMail for step E. Optional WMC Pass check uses `resec_admin` / `resec_admin` (or `CORE_E2E_WMC_*`). `-SkipWmcCheck` skips step B WMC poll. `-IncludeMa02CLongCommdown` chains `MA-01-NCP7307` long scenario after F1.
+
 ## Lab prerequisites (NCP-7307 reconnect scenario)
 
 1. Core running with `AppSettings:EnableDebugInterface` = `True`.

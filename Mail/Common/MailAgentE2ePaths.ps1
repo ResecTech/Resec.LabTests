@@ -278,6 +278,31 @@ function Resolve-SendBulkAttachmentMailPath {
         -EnvironmentVariableName $script:MailAgentE2eSendBulkAttachmentMailEnvVar
 }
 
+function Resolve-SendEmlPath {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $Path = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Path)) {
+        if (Test-Path -LiteralPath $Path) {
+            return [System.IO.Path]::GetFullPath($Path)
+        }
+        throw "SendEml.exe not found: $Path"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:MAIL_E2E_SEND_EML_EXE)) {
+        $fromEnv = $env:MAIL_E2E_SEND_EML_EXE.Trim()
+        if (Test-Path -LiteralPath $fromEnv) {
+            return [System.IO.Path]::GetFullPath($fromEnv)
+        }
+    }
+
+    return Resolve-MailAgentE2eToolPath -ToolName 'SendEml' -ExecutableFileName 'SendEml.exe' `
+        -CallingScriptRoot $CallingScriptRoot
+}
+
 function Get-MailAgentE2eAgentExePathCandidates {
     param(
         [Parameter(Mandatory)]

@@ -23,7 +23,8 @@ foreach ($name in @(
         'MailAgentE2eMailAgentDebug.ps1',
         'MailAgentE2eTestFiles.ps1',
         'MailAgentE2ePaths.ps1',
-        'MailAgentE2eSimpleMailServer.ps1'
+        'MailAgentE2eSimpleMailServer.ps1',
+        'MailAgentE2eBulkSend.ps1'
     )) {
     $path = Join-Path $commonRoot $name
     if (-not (Test-Path -LiteralPath $path)) {

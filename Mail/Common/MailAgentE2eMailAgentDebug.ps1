@@ -584,6 +584,32 @@ Disable auto-start with MAILAGENT_E2E_NO_AUTOSTART=1 or pass -SkipStartMailAgent
     }
 }
 
+function Assert-MailAgentE2eIdleTempFolders {
+    param(
+        [string] $BaseUrl = '',
+        [string] $Context = 'temp folders must be idle'
+    )
+
+    $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+    $counts = $status.tempFolderFileCounts
+    if ($null -eq $counts) {
+        throw "$Context — status did not include tempFolderFileCounts."
+    }
+
+    foreach ($name in @('SanitizationInput', 'SanitizationOutput', 'SmtpInboundSpool', 'SmtpFailed')) {
+        $prop = $counts.PSObject.Properties[$name]
+        if ($null -eq $prop) {
+            continue
+        }
+        $value = [int]$prop.Value
+        if ($value -ne 0) {
+            throw "$Context — $name count=$value (expected 0). $(Format-MailAgentDebugStatusSummary -Status $status)"
+        }
+    }
+
+    return $status
+}
+
 function Initialize-MailAgentE2eComponentVersionFromDebug {
     param([string] $BaseUrl = '')
 

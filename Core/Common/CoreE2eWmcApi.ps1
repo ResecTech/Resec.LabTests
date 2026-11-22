@@ -186,3 +186,52 @@ function Get-CoreE2eWmcEmailSanitizationRow {
 
     return $match[0]
 }
+
+function Wait-CoreE2eWmcEmailSanitizationBySubject {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [Parameter(Mandatory)]
+        [string] $ApiToken,
+        [Parameter(Mandatory)]
+        [string] $SubjectContains,
+        [int] $TimeoutSec = 120,
+        [int] $PollSec = 3,
+        [string[]] $AllowedOutcomes = @('OutcomePassed', 'OutcomeModified', 'OutcomePartiallyProcessed', 'OutcomeReconstructed')
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $range = Get-CoreE2eWmcSanitizationQueryTimeRange
+        $body = @{
+            subject          = $SubjectContains
+            startTime        = $range.StartTime
+            endTime          = $range.EndTime
+            pageIndex        = 1
+            pageSize         = 25
+            sanitizationType = 1
+        }
+
+        $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
+            -Path '/v1/sanitizations/email' -Method Post -BodyObject $body
+        $data = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('data', 'Data')
+        foreach ($row in @($data)) {
+            if ($null -eq $row) {
+                continue
+            }
+            $subj = [string](Get-CoreE2eWmcRestPropertyValue -Object $row -Names @('mailSubject', 'MailSubject'))
+            if ($subj -notlike "*$SubjectContains*") {
+                continue
+            }
+            $outcome = [string](Get-CoreE2eWmcRestPropertyValue -Object $row -Names @('outcome', 'Outcome'))
+            if ($AllowedOutcomes.Count -gt 0 -and $AllowedOutcomes -notcontains $outcome) {
+                continue
+            }
+            return $row
+        }
+
+        Start-Sleep -Seconds $PollSec
+    }
+
+    throw "WMC did not show email sanitization with subject containing '$SubjectContains' within ${TimeoutSec}s."
+}
