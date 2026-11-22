@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 $script:MailAgentE2eSimpleMailServerEnvVar = 'MAIL_E2E_SIMPLE_MAIL_SERVER_EXE'
 $script:MailAgentE2eSendBulkAttachmentMailEnvVar = 'MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE'
+$script:MailAgentE2eSendEmlEnvVar = 'MAIL_E2E_SEND_EML_EXE'
 
 . (Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1')
 
@@ -86,6 +87,10 @@ function Get-MailAgentE2eToolPathCandidates {
             $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
             $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
             $candidates.Add((Join-Path $toolDir "bin\publish\single-file\$ExecutableFileName"))
+            if ($ToolName -eq 'SendEml') {
+                $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0\$ExecutableFileName"))
+                $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0\$ExecutableFileName"))
+            }
         }
     }
 
@@ -172,11 +177,19 @@ function Set-MailAgentE2eToolEnvironment {
             ToolName = 'SimpleMailServer'
             ExecutableFileName = 'SimpleMailServer.exe'
             EnvironmentVariableName = $script:MailAgentE2eSimpleMailServerEnvVar
+            Required = $true
         },
         @{
             ToolName = 'SendBulkAttachmentMail'
             ExecutableFileName = 'SendBulkAttachmentMail.exe'
             EnvironmentVariableName = $script:MailAgentE2eSendBulkAttachmentMailEnvVar
+            Required = $true
+        },
+        @{
+            ToolName = 'SendEml'
+            ExecutableFileName = 'SendEml.exe'
+            EnvironmentVariableName = $script:MailAgentE2eSendEmlEnvVar
+            Required = $false
         }
     )
 
@@ -201,7 +214,12 @@ function Set-MailAgentE2eToolEnvironment {
             -EnvironmentVariableName ''
 
         if ($null -eq $found) {
-            $missing.Add("$($def.ExecutableFileName) ($envName)")
+            if ($def.Required) {
+                $missing.Add("$($def.ExecutableFileName) ($envName)")
+            }
+            elseif (-not $Quiet) {
+                Write-Host "Optional tool not found (skipped): $($def.ExecutableFileName) ($envName)"
+            }
             continue
         }
 
@@ -300,7 +318,7 @@ function Resolve-SendEmlPath {
     }
 
     return Resolve-MailAgentE2eToolPath -ToolName 'SendEml' -ExecutableFileName 'SendEml.exe' `
-        -CallingScriptRoot $CallingScriptRoot
+        -CallingScriptRoot $CallingScriptRoot -EnvironmentVariableName $script:MailAgentE2eSendEmlEnvVar
 }
 
 function Get-MailAgentE2eAgentExePathCandidates {

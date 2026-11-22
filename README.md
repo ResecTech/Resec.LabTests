@@ -20,7 +20,7 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    .\ScanAgent\P0\SA-01-ConnectSourcesDestinationsLoad.ps1
    .\Core\NCP7330-QrImageSanitize.ps1 -PolicyTemplateXml C:\resec\ImportExport\latest.xml
    .\Core\NCP7344-OfficeNoCdrSanitize.ps1
-   .\Mail\P0\MA-01-SmokeAndInbound.ps1 -ConfirmSirOffForStepB
+   .\Mail\P0\MA-01-SmokeAndInbound.ps1
    .\FileTypeDetection\P0\FTD-01-E2E.ps1
    .\DirWatcher\P0\DW-01-NCP7340-SourceMovedToTempOnSanitize.ps1
    .\DirWatcher\P0\DW-02-NCP7343-ProcessEmptyFolders.ps1

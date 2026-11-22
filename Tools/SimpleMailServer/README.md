@@ -14,6 +14,6 @@ E2E scripts resolve the exe via `Mail\Common\MailAgentE2ePaths.ps1` (LabTests `T
 
 ## Headless config
 
-Shared lab defaults: `Mail\Config\simple-mail-server.appsettings.json` (port, save folder, response delay). Override per run with `--config`, `--port`, `--save-folder`, etc. (see MA-01 / `MailAgentE2eSimpleMailServer.ps1`).
+Shared lab defaults: `Mail\Config\simple-mail-server.appsettings.json` (port, save folder, response delay). Override per run with `--config`, `--port`, `--save-folder`, etc. (see mail P0 scripts / `MailAgentE2eSimpleMailServer.ps1`).
 
 Moved from `Resec.Agent.Mail` — **SendBulkAttachmentMail** remains in the Mail Agent repo.

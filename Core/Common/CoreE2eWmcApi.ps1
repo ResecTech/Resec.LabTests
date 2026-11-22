@@ -187,6 +187,73 @@ function Get-CoreE2eWmcEmailSanitizationRow {
     return $match[0]
 }
 
+$script:CoreE2eWmcEmailOutcomeNameToValue = @{
+    OutcomePassed               = 100
+    OutcomeModified             = 101
+    OutcomePartiallyProcessed   = 102
+    OutcomeContentRemoved       = 103
+    OutcomePasswordProtectedContentRemoved = 104
+    OutcomeRedacted             = 105
+    OutcomeReconstructed        = 106
+    OutcomeMultipartReceived    = 107
+    OutcomeBypassed             = 108
+    OutcomeReleased             = 109
+}
+
+function Test-CoreE2eWmcEmailSanitizationOutcomeAllowed {
+    param(
+        $Outcome,
+        [string[]] $AllowedOutcomes
+    )
+
+    if ($AllowedOutcomes.Count -eq 0) {
+        return $true
+    }
+
+    if ($null -eq $Outcome) {
+        return $false
+    }
+
+    $text = [string]$Outcome
+    if ($AllowedOutcomes -contains $text) {
+        return $true
+    }
+
+    $allowedInts = @()
+    foreach ($name in $AllowedOutcomes) {
+        if ($script:CoreE2eWmcEmailOutcomeNameToValue.ContainsKey($name)) {
+            $allowedInts += $script:CoreE2eWmcEmailOutcomeNameToValue[$name]
+        }
+    }
+
+    if ($text -match '^\d+$') {
+        return $allowedInts -contains [int]$text
+    }
+
+    return $false
+}
+
+function Test-CoreE2eWmcEmailRowSubjectMatches {
+    param(
+        $Row,
+        [Parameter(Mandatory)]
+        [string] $SubjectContains
+    )
+
+    if ($null -eq $Row) {
+        return $false
+    }
+
+    foreach ($prop in @('mailSubject', 'MailSubject', 'fileName', 'FileName')) {
+        $value = [string](Get-CoreE2eWmcRestPropertyValue -Object $Row -Names @($prop))
+        if (-not [string]::IsNullOrWhiteSpace($value) -and $value -like "*$SubjectContains*") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Wait-CoreE2eWmcEmailSanitizationBySubject {
     param(
         [Parameter(Mandatory)]
@@ -195,43 +262,74 @@ function Wait-CoreE2eWmcEmailSanitizationBySubject {
         [string] $ApiToken,
         [Parameter(Mandatory)]
         [string] $SubjectContains,
+        [string[]] $MailTo = @(),
         [int] $TimeoutSec = 120,
         [int] $PollSec = 3,
         [string[]] $AllowedOutcomes = @('OutcomePassed', 'OutcomeModified', 'OutcomePartiallyProcessed', 'OutcomeReconstructed')
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $pollIndex = 0
+    $lastDiag = ''
+
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $pollIndex++
         $range = Get-CoreE2eWmcSanitizationQueryTimeRange
-        $body = @{
-            subject          = $SubjectContains
-            startTime        = $range.StartTime
-            endTime          = $range.EndTime
-            pageIndex        = 1
-            pageSize         = 25
-            sanitizationType = 1
+        $queries = @(
+            @{ useSubjectFilter = $true }
+            @{ useSubjectFilter = $false }
+        )
+
+        foreach ($mode in $queries) {
+            $body = @{
+                startTime        = $range.StartTime
+                endTime          = $range.EndTime
+                pageIndex        = 1
+                pageSize         = 50
+                sanitizationType = 1
+                sortField        = 'TimeUploaded'
+                sortOrder        = 'Desc'
+            }
+            if ($mode.useSubjectFilter) {
+                $body.subject = $SubjectContains
+            }
+            if ($MailTo -and $MailTo.Count -gt 0) {
+                $body.to = @($MailTo | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+
+            $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
+                -Path '/v1/sanitizations/email' -Method Post -BodyObject $body
+            $data = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('data', 'Data')
+            $rows = @($data)
+            if ($rows.Count -eq 0 -or $null -eq $rows[0]) {
+                $lastDiag = 'rows=0'
+                continue
+            }
+
+            foreach ($row in $rows) {
+                if ($null -eq $row) {
+                    continue
+                }
+                if (-not (Test-CoreE2eWmcEmailRowSubjectMatches -Row $row -SubjectContains $SubjectContains)) {
+                    continue
+                }
+
+                $outcome = Get-CoreE2eWmcRestPropertyValue -Object $row -Names @('outcome', 'Outcome')
+                if (-not (Test-CoreE2eWmcEmailSanitizationOutcomeAllowed -Outcome $outcome -AllowedOutcomes $AllowedOutcomes)) {
+                    $lastDiag = "matched subject but outcome=$outcome (waiting for $($AllowedOutcomes -join ','))"
+                    continue
+                }
+
+                return $row
+            }
         }
 
-        $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
-            -Path '/v1/sanitizations/email' -Method Post -BodyObject $body
-        $data = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('data', 'Data')
-        foreach ($row in @($data)) {
-            if ($null -eq $row) {
-                continue
-            }
-            $subj = [string](Get-CoreE2eWmcRestPropertyValue -Object $row -Names @('mailSubject', 'MailSubject'))
-            if ($subj -notlike "*$SubjectContains*") {
-                continue
-            }
-            $outcome = [string](Get-CoreE2eWmcRestPropertyValue -Object $row -Names @('outcome', 'Outcome'))
-            if ($AllowedOutcomes.Count -gt 0 -and $AllowedOutcomes -notcontains $outcome) {
-                continue
-            }
-            return $row
+        if ($pollIndex -eq 1 -or ($pollIndex % 5) -eq 0) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] WMC poll ${pollIndex}: subject '*$SubjectContains*'; $lastDiag"
         }
 
         Start-Sleep -Seconds $PollSec
     }
 
-    throw "WMC did not show email sanitization with subject containing '$SubjectContains' within ${TimeoutSec}s."
+    throw "WMC did not show email sanitization with subject containing '$SubjectContains' and allowed outcome within ${TimeoutSec}s (last: $lastDiag)."
 }

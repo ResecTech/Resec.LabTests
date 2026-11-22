@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  MA-01 / NCP-7307: After Core comm outage during outbound staging, sanitized mail is delivered when Core returns.
+  MA-02 C / NCP-7307: After Core comm outage during outbound staging, sanitized mail is delivered when Core returns.
 
 .DESCRIPTION
   Runs two commdown hold durations (short ~10s and long ~30s) against the same lab setup.
@@ -23,14 +23,14 @@
     | --- | --- |
     | Resec.LabTests\Tools\SimpleMailServer\bin\x64\Debug\...\SimpleMailServer.exe (or bin\publish\single-file\) | Outbound capture SMTP (--cli); started by this script unless -SkipStartSimpleMailServer |
     | SendBulkAttachmentMail\bin\Debug\...\SendBulkAttachmentMail.exe (or publish single-file) | Inbound bulk send to mail agent SMTP |
-    | Mail\Config\simple-mail-server.appsettings.json | Headless SimpleMailServer config for MA-01 |
+    | Mail\Config\simple-mail-server.appsettings.json | Headless SimpleMailServer config for mail E2E |
     | Fixtures\Mail\E2eAttach\ | Attachments for bulk send (e.g. clean-sample.txt, minimal-inbound.eml) |
 
     Tool paths (first match wins): -SimpleMailServerPath / -SendBulkAttachmentMailPath, then
     MAIL_E2E_SIMPLE_MAIL_SERVER_EXE / MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE, then repo build outputs and PATH.
-    Dot-source src\Test\Common\Initialize-MailAgentE2eToolPaths.ps1 to discover tools and set those variables.
+    Dot-source Resec.LabTests\Mail\Common\Initialize-MailAgentE2eToolPaths.ps1 to discover tools and set those variables.
     Set MAILAGENT_TEST_FILES_ROOT for fixture overrides.
-    See src\Test\Common\README.md for lab setup (Core/mail agent debug, Test Platform env).
+    See Resec.LabTests\Mail\Common\README.md for lab setup (Core/mail agent debug, Test Platform env).
 
 .NOTES
   Exit 0 = all selected scenarios passed; Exit 1 = any failed.
@@ -63,7 +63,10 @@ param(
     [switch] $SkipStartSimpleMailServer,
     [string] $MailAgentExePath = '',
     [int] $MailAgentStartupTimeoutSec = 90,
-    [switch] $SkipStartMailAgent
+    [switch] $SkipStartMailAgent,
+    [switch] $SkipCorePolicySetup,
+    [string] $MailRelayName = '',
+    [string] $CoreDebugHookUrl = ''
 )
 
 Set-StrictMode -Version Latest
@@ -76,6 +79,7 @@ function Get-LabTestDeployRequirements {
 
 $script:MaE2eCommonRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Common'
 . (Join-Path $script:MaE2eCommonRoot 'MailAgentE2eBootstrap.ps1') -CallingScriptRoot $PSScriptRoot
+. (Join-Path $script:MaE2eCommonRoot 'MailAgentE2eCorePolicy.ps1')
 
 Assert-MailAgentE2eBulkPrerequisites -CallingScriptRoot $PSScriptRoot `
     -SimpleMailServerPathOverride $SimpleMailServerPath `
@@ -86,6 +90,8 @@ $simpleMailProcess = $null
 $simpleMailStartedByScript = $false
 $mailAgentProcess = $null
 $mailAgentStartedByScript = $false
+$script:PolicyStackPushed = $false
+$script:CoreDebugHookUrl = $null
 
 function Write-TestStep {
     param([string] $Message)
@@ -241,16 +247,16 @@ function Invoke-Ma01ReconnectScenario {
 $scenarioDefinitions = @(
     @{
         Key = 'Short'
-        TestId = 'MA-01-Short'
-        TestTitle = 'NCP-7307 short disconnect (10s) outbound delivery'
+        TestId = 'MA-02-C-Short'
+        TestTitle = 'MA-02 C NCP-7307 short disconnect (10s) outbound delivery'
         Label = 'Short disconnect / reconnect'
         CommDownHoldSeconds = $ShortCommDownHoldSeconds
         ReconnectTimeoutSec = $ShortReconnectTimeoutSec
     },
     @{
         Key = 'Long'
-        TestId = 'MA-01-Long'
-        TestTitle = 'NCP-7307 long disconnect (30s+) outbound delivery'
+        TestId = 'MA-02-C-Long'
+        TestTitle = 'MA-02 C NCP-7307 long disconnect (30s+) outbound delivery'
         Label = 'Long disconnect / reconnect'
         CommDownHoldSeconds = $LongCommDownHoldSeconds
         ReconnectTimeoutSec = $LongReconnectTimeoutSec
@@ -284,6 +290,15 @@ try {
     Write-TestStep 'Waiting for Core readiness (debug ready).'
     Wait-MailAgentCoreReady -BaseUrl $CoreDebugBaseUrl | Out-Null
 
+    $script:CoreDebugHookUrl = Get-MailAgentE2eCoreDebugHookUrl -BaseUrl $CoreDebugBaseUrl -Override $CoreDebugHookUrl
+    if (-not $SkipCorePolicySetup) {
+        $policyTempFolder = Get-MailAgentE2eDefaultLabTempFolder -Override $MailTempFolder
+        Write-TestStep ("Core: install mail lab policy (next hop 127.0.0.1:$SimpleMailPort).")
+        Install-MailAgentE2eLabCorePolicy -HookUrl $script:CoreDebugHookUrl -RelayName $MailRelayName `
+            -NextHopPort $SimpleMailPort -InboundPort $InboundSmtpPort -TempFolder $policyTempFolder
+        $script:PolicyStackPushed = $true
+    }
+
     Write-TestStep 'Ensuring mail agent is running (debug hook).'
     $mailEnsure = Ensure-MailAgentE2eProcessRunning -CallingScriptRoot $PSScriptRoot `
         -BaseUrl $MailAgentDebugBaseUrl -MailAgentExePath $MailAgentExePath `
@@ -296,6 +311,13 @@ try {
     $agentStatus = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugBaseUrl -ExpectedInboundPort $InboundSmtpPort
     Write-TestStep ("Mail agent: {0}" -f (Format-MailAgentDebugStatusSummary -Status $agentStatus))
     Initialize-MailAgentE2eComponentVersionFromDebug -BaseUrl $MailAgentDebugBaseUrl
+
+    if ($script:PolicyStackPushed) {
+        Write-TestStep 'Core: wait for lab policy on mail agent (agentcomm nudge only if first connect stalls).'
+        Ensure-MailAgentE2eLabPolicyOnAgent -BaseUrl $MailAgentDebugBaseUrl -HookUrl $script:CoreDebugHookUrl
+        $agentStatus = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugBaseUrl -ExpectedInboundPort $InboundSmtpPort
+        Write-TestStep ("Mail agent after policy apply: {0}" -f (Format-MailAgentDebugStatusSummary -Status $agentStatus))
+    }
 
     $tempRoot = Get-EffectiveMailTempFolder -MailAgentDebugUrl $MailAgentDebugBaseUrl
     $stagingFolder = Get-SanitizationOutputFolder -TempRoot $tempRoot
@@ -343,6 +365,16 @@ catch {
     throw
 }
 finally {
+    if ($script:PolicyStackPushed -and $script:CoreDebugHookUrl) {
+        try {
+            Write-TestStep 'Core: poppolicystate'
+            Restore-MailAgentE2eLabCorePolicy -HookUrl $script:CoreDebugHookUrl
+        }
+        catch {
+            Write-Warning "poppolicystate failed: $($_.Exception.Message)"
+        }
+    }
+
     if ($simpleMailStartedByScript -and $simpleMailProcess -and -not $simpleMailProcess.HasExited) {
         try {
             Stop-Process -Id $simpleMailProcess.Id -Force -ErrorAction SilentlyContinue
@@ -353,7 +385,7 @@ finally {
 
     if ($mailAgentStartedByScript -and $mailAgentProcess -and -not $mailAgentProcess.HasExited) {
         try {
-            Write-TestStep "Stopping mail agent started by MA-01 (pid=$($mailAgentProcess.Id))."
+            Write-TestStep "Stopping mail agent started by MA-02-C (pid=$($mailAgentProcess.Id))."
             Stop-Process -Id $mailAgentProcess.Id -Force -ErrorAction SilentlyContinue
         }
         catch {

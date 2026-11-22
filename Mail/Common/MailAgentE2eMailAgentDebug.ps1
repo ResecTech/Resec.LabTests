@@ -100,6 +100,54 @@ function Add-MailAgentE2eLogMark {
     return Invoke-MailAgentDebugHook -Command 'logmark' -Message $Message -BaseUrl $BaseUrl
 }
 
+function Ensure-MailAgentE2eCoreDebugHookLoaded {
+    if (Get-Command -Name 'Invoke-CoreE2eDebugHook' -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $coreHook = Join-Path (Join-Path (Get-LabTestsRoot) 'Core\Common') 'CoreE2eDebugHook.ps1'
+    if (-not (Test-Path -LiteralPath $coreHook)) {
+        throw "Core E2E debug hook script not found: $coreHook"
+    }
+
+    . $coreHook
+}
+
+function Write-MailAgentE2eCorrelationLogMark {
+    <#
+    .SYNOPSIS
+      Writes the same searchable line to Core and mail agent Serilog (DEBUG: E2E logmark: …).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $TestId,
+        [Parameter(Mandatory)]
+        [string] $Mark,
+        [string] $CoreDebugHookUrl = '',
+        [string] $MailAgentDebugUrl = ''
+    )
+
+    $text = "$TestId | $Mark"
+    if (-not [string]::IsNullOrWhiteSpace($CoreDebugHookUrl)) {
+        try {
+            Ensure-MailAgentE2eCoreDebugHookLoaded
+            $null = Invoke-CoreE2eDebugHook -HookUrl $CoreDebugHookUrl.Trim() -Command 'logmark' -Message $text
+        }
+        catch {
+            Write-Host "[WARN] Core logmark skipped: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($MailAgentDebugUrl)) {
+        try {
+            $null = Add-MailAgentE2eLogMark -Message $text -BaseUrl $MailAgentDebugUrl
+        }
+        catch {
+            Write-Host "[WARN] Mail agent logmark skipped: $($_.Exception.Message)"
+        }
+    }
+}
+
 function Set-MailAgentDebugOverload {
     param(
         [Parameter(Mandatory)]
@@ -269,11 +317,15 @@ function Format-MailAgentDebugStatusSummary {
     $ports = @($Status.inboundListenPorts)
     $portText = if ($ports.Count -gt 0) { ($ports -join ',') } else { 'none' }
     $counts = $Status.tempFolderFileCounts
-    $outCount = if ($null -ne $counts -and $counts.PSObject.Properties['SanitizationOutput']) {
-        [string]$counts.SanitizationOutput
-    }
-    else {
-        '?'
+    $inputCount = '?'
+    $outCount = '?'
+    if ($null -ne $counts) {
+        if ($counts.PSObject.Properties['SanitizationInput']) {
+            $inputCount = [string]$counts.SanitizationInput
+        }
+        if ($counts.PSObject.Properties['SanitizationOutput']) {
+            $outCount = [string]$counts.SanitizationOutput
+        }
     }
 
     $connProp = $Status.PSObject.Properties['coreConnectionStatus']
@@ -292,9 +344,312 @@ function Format-MailAgentDebugStatusSummary {
     $phaseProp = $Status.PSObject.Properties['coreSessionPhase']
     if ($null -ne $phaseProp) { $phase = $phaseProp.Value }
 
-    return ("core={0} connecting={1} phase={2} inboundListening={3} ports={4} outboundQueue={5} sanitizationOutputFiles={6} temp={7}" -f `
-        $conn, $connecting, $phase, $Status.inboundSmtpListening, $portText, `
-        $Status.outboundQueueDepth, $outCount, $Status.tempFolderRoot)
+    $openInbound = $null
+    if ($null -ne $Status.PSObject.Properties['openInboundSmtpSessions']) {
+        $openInbound = $Status.openInboundSmtpSessions
+    }
+
+    $inboundSan = $null
+    if ($null -ne $Status.PSObject.Properties['inboundSanitizationsInProgress']) {
+        $inboundSan = $Status.inboundSanitizationsInProgress
+    }
+
+    $spoolBacklog = $null
+    if ($null -ne $Status.PSObject.Properties['inboundSpoolBacklog']) {
+        $spoolBacklog = $Status.inboundSpoolBacklog
+    }
+
+    return ("core={0} connecting={1} phase={2} inboundListening={3} ports={4} openInboundSmtpSessions={5} inboundSanitizationsInProgress={6} SanitizationInput={7} outboundQueue={8} sanitizationOutputFiles={9} inboundSpoolBacklog={10} temp={11}" -f `
+        $conn, $connecting, $phase, $Status.inboundSmtpListening, $portText, $openInbound, $inboundSan, `
+        $inputCount, $Status.outboundQueueDepth, $outCount, $spoolBacklog, $Status.tempFolderRoot)
+}
+
+function Assert-MailAgentE2eLabRelayEnvironment {
+    param(
+        [string] $RelayName = 'mail',
+        [switch] $FailOnScanAgent
+    )
+
+    $relay = if ([string]::IsNullOrWhiteSpace($RelayName)) { 'mail' } else { $RelayName.Trim() }
+    $scanNames = @('Resec.Agent.ScanAgent', 'ReZoneScanAgent')
+    $running = @()
+    foreach ($name in $scanNames) {
+        if (Get-Process -Name $name -ErrorAction SilentlyContinue) {
+            $running += $name
+        }
+    }
+
+    if ($running.Count -gt 0) {
+        $msg = "Scan Agent process(es) running ($($running -join ', ')). Scan Agent cannot handle mail PutFile; stop it during mail E2E or ensure relay '$relay' is registered only on the mail agent."
+        if ($FailOnScanAgent) {
+            throw $msg
+        }
+        Write-Host "[WARN] $msg"
+    }
+}
+
+function Test-MailAgentE2eRelayPutFileStall {
+    param($Status)
+
+    if ($null -eq $Status) {
+        return $false
+    }
+
+    $counts = $Status.tempFolderFileCounts
+    $inputCount = 0
+    if ($null -ne $counts -and $counts.PSObject.Properties['SanitizationInput']) {
+        $inputCount = [int]$counts.SanitizationInput
+    }
+
+    $openInbound = 0
+    if ($null -ne $Status.PSObject.Properties['openInboundSmtpSessions']) {
+        $openInbound = [int]$Status.openInboundSmtpSessions
+    }
+
+    $inboundSan = 0
+    if ($null -ne $Status.PSObject.Properties['inboundSanitizationsInProgress']) {
+        $inboundSan = [int]$Status.inboundSanitizationsInProgress
+    }
+
+    $outQueue = 0
+    if ($null -ne $Status.PSObject.Properties['outboundQueueDepth']) {
+        $outQueue = [int]$Status.outboundQueueDepth
+    }
+
+    if ($openInbound -gt 2 -or $inputCount -gt 3) {
+        return $false
+    }
+
+    return ($openInbound -gt 0 -or $inboundSan -gt 0) -and $inputCount -gt 0 -and $outQueue -eq 0
+}
+
+function Clear-MailAgentE2eInboundTempFolders {
+    param(
+        [Parameter(Mandatory)]
+        [string] $TempRoot
+    )
+
+    $root = $TempRoot.Trim().TrimEnd('\', '/')
+    foreach ($name in @('SanitizationInput', 'SmtpInboundSpool', 'SanitizationOutput', 'SmtpFailed')) {
+        $dir = Join-Path $root $name
+        if (-not (Test-Path -LiteralPath $dir)) {
+            continue
+        }
+
+        Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Prepare-MailAgentE2eFreshInboundLab {
+    param(
+        [string] $BaseUrl = '',
+        [string] $TempFolderOverride = '',
+        [string] $CoreDebugHookUrl = '',
+        [string] $TestId = 'MA-01'
+    )
+
+    $tempRoot = Get-MailAgentE2eDefaultLabTempFolder -Override $TempFolderOverride
+    if (Test-MailAgentDebugHookAvailable -BaseUrl $BaseUrl) {
+        try {
+            $st = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+            if (-not [string]::IsNullOrWhiteSpace([string]$st.tempFolderRoot)) {
+                $tempRoot = [string]$st.tempFolderRoot
+            }
+        }
+        catch {
+        }
+    }
+
+    $counts = $null
+    if (Test-MailAgentDebugHookAvailable -BaseUrl $BaseUrl) {
+        try {
+            $st = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+            $counts = $st.tempFolderFileCounts
+        }
+        catch {
+        }
+    }
+
+    $needClean = $true
+    if ($null -ne $counts) {
+        $total = 0
+        foreach ($name in @('SanitizationInput', 'SmtpInboundSpool', 'SanitizationOutput', 'SmtpFailed')) {
+            if ($counts.PSObject.Properties[$name]) {
+                $total += [int]$counts.$name
+            }
+        }
+        $needClean = ($total -gt 0)
+    }
+
+    if (-not $needClean) {
+        return
+    }
+
+    Write-Host "[INFO] Mail E2E: stopping mail agent and clearing inbound temp backlog under $tempRoot."
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark "prepare | stop agent + clear temp backlog ($tempRoot)" `
+        -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $BaseUrl
+    Stop-MailAgentE2eDesktopAgents
+    Start-Sleep -Seconds 2
+    Clear-MailAgentE2eInboundTempFolders -TempRoot $tempRoot
+    $script:MailAgentE2eProcessEnsureAttempted = $false
+}
+
+function Test-MailAgentLogTailShowsLabPolicyApplied {
+    param(
+        [string[]] $TailLines
+    )
+
+    if ($null -eq $TailLines -or $TailLines.Count -eq 0) {
+        return $false
+    }
+
+    $blob = ($TailLines -join [Environment]::NewLine)
+    return ($blob -match '(?i)Email agent configuration applied from Resec Core policy') -or `
+        ($blob -match '(?i)ReturnImmediateResponse\)\s+is\s+disabled')
+}
+
+function Test-MailAgentLogTailShowsPolicyApplyStalled {
+    <#
+      True when the agent reached session default but never finished FlowManager policy apply
+      (typical when agentcomm nudge disconnects during the first connect handshake).
+    #>
+    param(
+        [string[]] $TailLines
+    )
+
+    if ($null -eq $TailLines -or $TailLines.Count -lt 2) {
+        return $false
+    }
+
+    $blob = ($TailLines -join [Environment]::NewLine)
+    if (Test-MailAgentLogTailShowsLabPolicyApplied -TailLines $TailLines) {
+        return $false
+    }
+
+    $sessionDefault = $blob -match '(?i)Current policy set to \d+ \(session default\)'
+    $pastSyslog = $blob -match '(?i)cannot enable syslog: syslogHost is empty'
+    $readySignals = ($blob -match '(?i)\*\*\* CONNECTED to Resec Core Server') -or `
+        ($blob -match '(?i)Policy logger created') -or `
+        ($blob -match '(?i)SMTP timeouts:')
+    return ($sessionDefault -and $pastSyslog -and -not $readySignals)
+}
+
+function Wait-MailAgentE2ePolicyAppliedInLog {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [int] $TimeoutSec = 90,
+        [int] $TailLineCount = 400,
+        [int] $ProgressIntervalSec = 5,
+        [string] $CoreDebugHookUrl = '',
+        [string] $TestId = 'MA-01'
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $nextProgress = [DateTimeOffset]::UtcNow
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $log = Get-MailAgentDebugLogPathEvidence -BaseUrl $BaseUrl
+        if (-not [string]::IsNullOrWhiteSpace($log) -and (Test-Path -LiteralPath $log)) {
+            $tail = @(Get-Content -LiteralPath $log -Tail $TailLineCount -ErrorAction SilentlyContinue)
+            if (Test-MailAgentLogTailShowsLabPolicyApplied -TailLines $tail) {
+                Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark 'policy | mail agent log shows lab policy apply' `
+                    -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $BaseUrl
+                return
+            }
+
+            if ([DateTimeOffset]::UtcNow -ge $nextProgress) {
+                $stall = Test-MailAgentLogTailShowsPolicyApplyStalled -TailLines $tail
+                $hint = if ($stall) { 'stall after session default (defer agentcomm nudge until apply completes)' } else { 'waiting' }
+                Write-MailAgentE2eCorrelationLogMark -TestId $TestId `
+                    -Mark "policy | wait ${ProgressIntervalSec}s | $hint | tailLines=$($tail.Count)" `
+                    -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $BaseUrl
+                $nextProgress = [DateTimeOffset]::UtcNow.AddSeconds($ProgressIntervalSec)
+            }
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Mail agent did not log lab policy apply within ${TimeoutSec}s (tail $TailLineCount lines). Confirm assignment rule mail_agent and Relay Settings facet; avoid agentcomm nudge during first policy apply."
+}
+
+function Ensure-MailAgentE2eLabPolicyOnAgent {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $TestId = 'MA-01',
+        [int] $InitialWaitSec = 20,
+        [int] $AfterNudgeWaitSec = 90
+    )
+
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark 'policy | wait for first connect apply (no nudge yet)' `
+        -CoreDebugHookUrl $HookUrl -MailAgentDebugUrl $BaseUrl
+
+    try {
+        Wait-MailAgentE2ePolicyAppliedInLog -BaseUrl $BaseUrl -CoreDebugHookUrl $HookUrl -TestId $TestId `
+            -TimeoutSec $InitialWaitSec -ProgressIntervalSec 5
+        return
+    }
+    catch {
+        Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark "policy | first connect apply timeout; agentcomm nudge | $($_.Exception.Message)" `
+            -CoreDebugHookUrl $HookUrl -MailAgentDebugUrl $BaseUrl
+    }
+
+    Invoke-MailAgentE2eAgentCommNudge -HookUrl $HookUrl
+    $null = Wait-MailAgentDebugReady -BaseUrl $BaseUrl
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark 'policy | post-nudge wait for apply' `
+        -CoreDebugHookUrl $HookUrl -MailAgentDebugUrl $BaseUrl
+    Wait-MailAgentE2ePolicyAppliedInLog -BaseUrl $BaseUrl -CoreDebugHookUrl $HookUrl -TestId $TestId `
+        -TimeoutSec $AfterNudgeWaitSec -ProgressIntervalSec 5
+}
+
+function Assert-MailAgentE2ePolicyFromAgentLog {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [string] $NextHopHost = '127.0.0.1',
+        [int] $NextHopPort = 26,
+        [int] $TailLineCount = 400
+    )
+
+    $log = Get-MailAgentDebugLogPathEvidence -BaseUrl $BaseUrl
+    if ([string]::IsNullOrWhiteSpace($log) -or -not (Test-Path -LiteralPath $log)) {
+        throw 'Mail agent debug logpath unavailable; cannot confirm Send Immediate Response off / next hop from policy apply.'
+    }
+
+    $tail = @(Get-Content -LiteralPath $log -Tail $TailLineCount -ErrorAction Stop)
+    $blob = ($tail -join [Environment]::NewLine)
+
+  # SmtpListener logs: "... (ReturnImmediateResponse) is disabled." — parentheses break naive "is disabled" patterns.
+    $sirOffPatterns = @(
+        '(?i)ReturnImmediateResponse\)\s+is\s+disabled'
+        '(?i)Send Immediate Response is off'
+        '(?i)Waiting for email to finish processing before SMTP reply \(Send Immediate Response is off\)'
+    )
+    $sirOff = $false
+    foreach ($pattern in $sirOffPatterns) {
+        if ($blob -match $pattern) {
+            $sirOff = $true
+            break
+        }
+    }
+    if (-not $sirOff) {
+        if ($blob -match '(?i)ReturnImmediateResponse\)\s+is\s+enabled') {
+            throw 'Mail agent log shows Send Immediate Response on (ReturnImmediateResponse enabled). Lab policy was not applied — check policy import, relay name, and agentcomm nudge.'
+        }
+        throw 'Mail agent log does not show Send Immediate Response off (expected listener line with ReturnImmediateResponse) is disabled. Lab policy may not be applied — check relay name and agentcomm nudge.'
+    }
+
+    $hopPattern = [regex]::Escape($NextHopHost)
+    $hopOk = $blob -match $hopPattern
+    if (-not $hopOk -and $NextHopPort -gt 0) {
+        $hopOk = $blob -match "(?i)Addresses:\s*${hopPattern}:${NextHopPort}"
+    }
+    if (-not $hopOk) {
+        throw "Mail agent log does not reference next hop '$NextHopHost' (port $NextHopPort). Verify lab policy import and FlowManager next-hop logging after policy apply."
+    }
 }
 
 function Get-MailAgentDebugTempFolderRoot {
@@ -584,6 +939,83 @@ Disable auto-start with MAILAGENT_E2E_NO_AUTOSTART=1 or pass -SkipStartMailAgent
     }
 }
 
+function Repair-MailAgentE2eOrphanInboundTempWhenIdle {
+    param(
+        [string] $BaseUrl = '',
+        [string] $Context = 'orphan inbound temp cleanup'
+    )
+
+    $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
+    if ([int]$status.openInboundSmtpSessions -gt 0 -or [int]$status.inboundSanitizationsInProgress -gt 0) {
+        Write-Host "[INFO] $Context - skip temp repair (open sessions or active sanitizations)."
+        return $false
+    }
+
+    $tempRoot = [string]$status.tempFolderRoot
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+        return $false
+    }
+
+    $counts = $status.tempFolderFileCounts
+    $hadBacklog = $false
+    foreach ($name in @('SanitizationInput', 'SmtpInboundSpool')) {
+        $reported = 0
+        if ($null -ne $counts -and $null -ne $counts.PSObject.Properties[$name]) {
+            $reported = [int]$counts.PSObject.Properties[$name].Value
+        }
+        $onDisk = Get-MailAgentE2eOnDiskTempFileCount -FolderPath (Join-Path $tempRoot $name)
+        if ($reported -gt 0 -or $onDisk -gt 0) {
+            $hadBacklog = $true
+        }
+    }
+
+    if (-not $hadBacklog) {
+        return $false
+    }
+
+    Write-Host "[INFO] $Context - clearing orphan files under SanitizationInput and SmtpInboundSpool."
+    Clear-MailAgentE2eInboundTempFolders -TempRoot $tempRoot
+    Start-Sleep -Seconds 2
+    return $true
+}
+
+function Wait-MailAgentE2eIdleTempFolders {
+    param(
+        [string] $BaseUrl = '',
+        [int] $TimeoutSec = 60,
+        [string] $Context = 'temp folders must be idle'
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $lastError = $null
+    while ((Get-Date) -lt $deadline) {
+        try {
+            return Assert-MailAgentE2eIdleTempFolders -BaseUrl $BaseUrl -Context $Context
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            Start-Sleep -Milliseconds 400
+        }
+    }
+
+    throw "Timed out after ${TimeoutSec}s waiting for idle temp folders ($Context). Last: $lastError"
+}
+
+function Get-MailAgentE2eOnDiskTempFileCount {
+    param(
+        [Parameter(Mandatory)][string] $FolderPath
+    )
+
+    if (-not [System.IO.Directory]::Exists($FolderPath)) {
+        return 0
+    }
+
+    return @(
+        Get-ChildItem -LiteralPath $FolderPath -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.Name.EndsWith('.tmp', [System.StringComparison]::OrdinalIgnoreCase) }
+    ).Count
+}
+
 function Assert-MailAgentE2eIdleTempFolders {
     param(
         [string] $BaseUrl = '',
@@ -593,7 +1025,13 @@ function Assert-MailAgentE2eIdleTempFolders {
     $status = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $BaseUrl
     $counts = $status.tempFolderFileCounts
     if ($null -eq $counts) {
-        throw "$Context — status did not include tempFolderFileCounts."
+        throw "$Context - status did not include tempFolderFileCounts."
+    }
+
+    $tempRoot = $null
+    $tempProp = $status.PSObject.Properties['tempFolderRoot']
+    if ($null -ne $tempProp -and -not [string]::IsNullOrWhiteSpace([string]$tempProp.Value)) {
+        $tempRoot = [string]$tempProp.Value
     }
 
     foreach ($name in @('SanitizationInput', 'SanitizationOutput', 'SmtpInboundSpool', 'SmtpFailed')) {
@@ -602,8 +1040,19 @@ function Assert-MailAgentE2eIdleTempFolders {
             continue
         }
         $value = [int]$prop.Value
-        if ($value -ne 0) {
-            throw "$Context — $name count=$value (expected 0). $(Format-MailAgentDebugStatusSummary -Status $status)"
+        $onDisk = $null
+        if (-not [string]::IsNullOrWhiteSpace($tempRoot)) {
+            $onDisk = Get-MailAgentE2eOnDiskTempFileCount -FolderPath (Join-Path $tempRoot $name)
+        }
+
+        if ($value -ne 0 -and $null -ne $onDisk -and $onDisk -eq 0) {
+            Write-Host "[INFO] $Context - $name debug count=$value but on-disk=$onDisk; treating as idle."
+            continue
+        }
+
+        if ($value -ne 0 -or ($null -ne $onDisk -and $onDisk -ne 0)) {
+            $diskNote = if ($null -eq $onDisk) { '' } else { " onDisk=$onDisk" }
+            throw "$Context - $name count=$value (expected 0)$diskNote. $(Format-MailAgentDebugStatusSummary -Status $status)"
         }
     }
 

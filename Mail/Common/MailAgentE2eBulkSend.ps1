@@ -24,6 +24,8 @@ function Write-MailAgentE2eBulkPrerequisitesHelp {
     Write-Host "  dotnet build $(Join-Path $labTestsRoot 'Tools\SimpleMailServer\SimpleMailServer.csproj') -c Debug"
     Write-Host 'Build SendBulkAttachmentMail (Resec.Agent.Mail):'
     Write-Host "  dotnet build `"$sln`" -c Debug -p:Platform=x64"
+    Write-Host 'Optional for MA-01 step E only — SendEml:'
+    Write-Host "  dotnet build `"$sln`" -c Debug (includes SendEml project)"
     Write-Host ''
     Write-Host 'Set tool paths (session):'
     Write-Host "  . $(Join-Path $commonRoot 'Initialize-MailAgentE2eToolPaths.ps1')"
@@ -353,7 +355,7 @@ function New-BulkSendAppsettings {
         }
         MinAttachmentsPerEmail   = $MinAttachmentsPerEmail
         MaxAttachmentsPerEmail   = $MaxAttachmentsPerEmail
-        EmailsPerHour            = 120
+        EmailsPerHour            = 3600
         MaxParallelSends         = 1
         EmailCount               = $EmailCount
         TestTimeMinutes          = 0
@@ -419,6 +421,9 @@ function Get-MailAgentE2eBulkSendFailureHints {
     elseif ($blob -match '421|service not available|closing connection') {
         $hints.Add('Likely temporary SMTP 421 from the mail agent (next-hop or queue pressure).')
     }
+    elseif ($blob -match '120000 milliseconds') {
+        $hints.Add('MailKit SmtpClient default 120s cap (rebuild SendBulkAttachmentMail after MailSendHelper.Timeout fix) or increase DeliveryTimeoutSec / Smtp:SendTimeoutSeconds when Send Immediate Response is off.')
+    }
     else {
         $hints.Add('Mail agent log: GET http://127.0.0.1:4505/debug/hook?command=logpath (when debug enabled).')
     }
@@ -437,36 +442,173 @@ function Test-MailAgentE2eExpectedCommdownInbound451 {
     return ($blob -match '451') -or ($blob -match 'service unavailable') -or ($blob -match 'try again later')
 }
 
-function Complete-BulkSendOnce {
+function Read-MailAgentE2eBulkSendRedirectFiles {
     param(
-        [hashtable] $BulkJob,
-        [int] $WaitExitTimeoutSec = 180,
-        [switch] $AllowExpectedCommdown451
+        [Parameter(Mandatory)][string] $StdoutFile,
+        [Parameter(Mandatory)][string] $StderrFile,
+        [int] $SettleWaitMs = 250
     )
 
-    $proc = $BulkJob.Process
-    if (-not $proc.WaitForExit($WaitExitTimeoutSec * 1000)) {
-        throw "SendBulkAttachmentMail did not exit within ${WaitExitTimeoutSec}s (PID $($proc.Id))."
+    $stdoutText = ''
+    $stderrText = ''
+    $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds([Math]::Max(0, $SettleWaitMs))
+    do {
+        if (Test-Path -LiteralPath $StdoutFile) {
+            $stdoutText = [System.IO.File]::ReadAllText($StdoutFile)
+        }
+        if (Test-Path -LiteralPath $StderrFile) {
+            $stderrText = [System.IO.File]::ReadAllText($StderrFile)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stdoutText.Trim())) {
+            break
+        }
+        if ([DateTimeOffset]::UtcNow -ge $deadline) {
+            break
+        }
+        Start-Sleep -Milliseconds 50
+    } while ($true)
+
+    return @{
+        Stdout = $stdoutText
+        Stderr = $stderrText
+    }
+}
+
+function ConvertFrom-MailAgentE2eBulkSendJsonReport {
+    param([string] $StdoutText)
+
+    if ([string]::IsNullOrWhiteSpace($StdoutText)) {
+        return $null
     }
 
-    $exitCode = $proc.ExitCode
-    $stdoutFile = $BulkJob.StdoutFile
-    $stderrFile = $BulkJob.StderrFile
-    $stdoutText = if (Test-Path -LiteralPath $stdoutFile) { [System.IO.File]::ReadAllText($stdoutFile) } else { '' }
-    $stderrText = if (Test-Path -LiteralPath $stderrFile) { [System.IO.File]::ReadAllText($stderrFile) } else { '' }
+    $candidates = @($StdoutText.Trim())
+    foreach ($line in @($StdoutText -split '\r?\n')) {
+        $trim = $line.Trim()
+        if ($trim.StartsWith('{') -and $trim.EndsWith('}')) {
+            $candidates += $trim
+        }
+    }
 
-    $report = $null
-    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+    foreach ($json in @($candidates | Select-Object -Unique)) {
         try {
-            $report = $stdoutText.Trim() | ConvertFrom-Json
+            return $json | ConvertFrom-Json
         }
         catch {
-            $report = $null
+            continue
+        }
+    }
+
+    return $null
+}
+
+function Get-MailAgentE2eBulkSendResolvedExitCode {
+    param(
+        $Process,
+        $JsonReport
+    )
+
+    $Process.Refresh()
+    $exitCode = $Process.ExitCode
+    $jsonExit = $null
+    if ($null -ne $JsonReport -and $null -ne $JsonReport.statistics) {
+        $jsonExit = $JsonReport.statistics.exitCode
+    }
+
+    if ($null -eq $exitCode -or ($exitCode -eq -1 -and $null -ne $jsonExit -and [int]$jsonExit -ge 0)) {
+        if ($null -ne $jsonExit) {
+            return [int]$jsonExit
         }
     }
 
     if ($null -eq $exitCode) {
-        $exitCode = -1
+        return -1
+    }
+
+    return [int]$exitCode
+}
+
+function Complete-BulkSendOnce {
+    param(
+        [hashtable] $BulkJob,
+        [int] $WaitExitTimeoutSec = 180,
+        [switch] $AllowExpectedCommdown451,
+        [string] $ProgressLabel = '',
+        [string] $MailAgentDebugUrl = '',
+        [int] $ProgressIntervalSec = 5,
+        [int] $InboundStallFailTimeoutSec = 75,
+        [switch] $EmitLogMarks = $false,
+        [string] $E2eTestId = '',
+        [string] $CoreDebugHookUrl = ''
+    )
+
+    if ($EmitLogMarks -and [string]::IsNullOrWhiteSpace($E2eTestId)) {
+        $EmitLogMarks = $false
+    }
+
+    $proc = $BulkJob.Process
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($WaitExitTimeoutSec)
+    $logProgress = -not [string]::IsNullOrWhiteSpace($ProgressLabel) -and -not [string]::IsNullOrWhiteSpace($MailAgentDebugUrl)
+    $bulkStartedUtc = [DateTimeOffset]::UtcNow
+    $emitLogMark = $EmitLogMarks -and `
+        (-not [string]::IsNullOrWhiteSpace($CoreDebugHookUrl) -or -not [string]::IsNullOrWhiteSpace($MailAgentDebugUrl))
+
+    if ($emitLogMark) {
+        Write-MailAgentE2eCorrelationLogMark -TestId $E2eTestId `
+            -Mark "$ProgressLabel | bulk SendBulkAttachmentMail started pid=$($proc.Id)" `
+            -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $MailAgentDebugUrl
+    }
+
+    while (-not $proc.HasExited) {
+        $remainingSec = ($deadline - [DateTimeOffset]::UtcNow).TotalSeconds
+        if ($remainingSec -le 0) {
+            $hint = "With Send Immediate Response off the client waits for full sanitization+outbound on the open SMTP session; lab runs usually finish within 60s. If this exceeds ${WaitExitTimeoutSec}s, check Core sanitization, relay PutFile (StrPropType_RelayName), and next hop."
+            throw "SendBulkAttachmentMail did not exit within ${WaitExitTimeoutSec}s (PID $($proc.Id)). $hint"
+        }
+
+        $waitMs = [Math]::Min($ProgressIntervalSec * 1000, [int][Math]::Ceiling($remainingSec * 1000))
+        if (-not $proc.WaitForExit($waitMs)) {
+            if ($logProgress) {
+                $st = $null
+                try {
+                    $st = Invoke-MailAgentDebugHook -Command 'status' -BaseUrl $MailAgentDebugUrl
+                }
+                catch {
+                    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    Write-Host ("[{0}] [STEP] {1} inbound wait (Send Immediate Response off): (status unavailable: $($_.Exception.Message))" -f $ts, $ProgressLabel)
+                }
+
+                if ($null -ne $st) {
+                    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    $elapsedSec = [int][Math]::Floor(($bulkStartedUtc - [DateTimeOffset]::UtcNow).TotalSeconds * -1)
+                    $summary = Format-MailAgentDebugStatusSummary -Status $st
+                    Write-Host ("[{0}] [STEP] {1} inbound wait ({2}s elapsed, Send Immediate Response off): {3}" -f $ts, $ProgressLabel, $elapsedSec, $summary)
+                    if ($emitLogMark) {
+                        Write-MailAgentE2eCorrelationLogMark -TestId $E2eTestId `
+                            -Mark "$ProgressLabel | wait ${elapsedSec}s | $summary" `
+                            -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $MailAgentDebugUrl
+                    }
+                    if ($InboundStallFailTimeoutSec -gt 0 -and $elapsedSec -ge $InboundStallFailTimeoutSec -and (Test-MailAgentE2eRelayPutFileStall -Status $st)) {
+                        throw ("Inbound delivery stalled after ${InboundStallFailTimeoutSec}s (open SMTP session, SanitizationInput backlog, outboundQueue=0). Core is likely waiting on relay PutFile (MQ can take up to 300s). Fix relay registration (StrPropType_RelayName=mail on lab policy), stop Resec.Agent.ScanAgent, then re-run. Last status: $(Format-MailAgentDebugStatusSummary -Status $st)")
+                    }
+                }
+            }
+        }
+    }
+
+    $null = $proc.WaitForExit()
+    $proc.Refresh()
+
+    $redirect = Read-MailAgentE2eBulkSendRedirectFiles -StdoutFile $BulkJob.StdoutFile -StderrFile $BulkJob.StderrFile
+    $stdoutText = $redirect.Stdout
+    $stderrText = $redirect.Stderr
+    $report = ConvertFrom-MailAgentE2eBulkSendJsonReport -StdoutText $stdoutText
+    $exitCode = Get-MailAgentE2eBulkSendResolvedExitCode -Process $proc -JsonReport $report
+
+    if ($emitLogMark) {
+        $exitHint = "exit=$exitCode"
+        Write-MailAgentE2eCorrelationLogMark -TestId $E2eTestId `
+            -Mark "$ProgressLabel | bulk SendBulkAttachmentMail finished $exitHint" `
+            -CoreDebugHookUrl $CoreDebugHookUrl -MailAgentDebugUrl $MailAgentDebugUrl
     }
 
     if ($exitCode -ne 0) {
@@ -527,23 +669,31 @@ function Complete-BulkSendExpectingFailure {
         throw "SendBulkAttachmentMail did not exit within ${WaitExitTimeoutSec}s (PID $($proc.Id))."
     }
 
-    $stdoutFile = $BulkJob.StdoutFile
-    $stderrFile = $BulkJob.StderrFile
-    $stdoutText = if (Test-Path -LiteralPath $stdoutFile) { [System.IO.File]::ReadAllText($stdoutFile) } else { '' }
-    $stderrText = if (Test-Path -LiteralPath $stderrFile) { [System.IO.File]::ReadAllText($stderrFile) } else { '' }
-    $combined = ($stdoutText + ' ' + $stderrText)
+    $null = $proc.WaitForExit()
+    $proc.Refresh()
 
-    $exitCode = $proc.ExitCode
-    if ($null -eq $exitCode) {
-        $exitCode = -1
-    }
+    $redirect = Read-MailAgentE2eBulkSendRedirectFiles -StdoutFile $BulkJob.StdoutFile -StderrFile $BulkJob.StderrFile
+    $stdoutText = $redirect.Stdout
+    $stderrText = $redirect.Stderr
+    $combined = ($stdoutText + ' ' + $stderrText)
+    $report = ConvertFrom-MailAgentE2eBulkSendJsonReport -StdoutText $stdoutText
+    $exitCode = Get-MailAgentE2eBulkSendResolvedExitCode -Process $proc -JsonReport $report
 
     if ($exitCode -eq 0) {
         throw "Expected inbound SMTP failure (non-zero exit) for blocked/infected fixture, but SendBulk exited 0."
     }
 
     if ($RequireSmtp5xx -and ($combined -notmatch '\b5\d{2}\b')) {
-        throw "Expected SMTP 5xx response in SendBulk output; exit=$exitCode output: $combined"
+        $failedCount = 0
+        if ($null -ne $report -and $null -ne $report.statistics -and $null -ne $report.statistics.failed) {
+            $failedCount = [int]$report.statistics.failed
+        }
+        if ($exitCode -ne 0 -and $failedCount -gt 0) {
+            Write-Host '[INFO] SendBulk exited non-zero for blocked fixture without a literal 5xx token in output (rebuild SendBulkAttachmentMail for SMTP status in JSON failedMessages.detail).'
+        }
+        else {
+            throw "Expected SMTP 5xx response in SendBulk output; exit=$exitCode output: $combined"
+        }
     }
 
     return @{
@@ -583,6 +733,16 @@ function New-MailAgentE2eAttachmentStagingFolder {
     return $dir
 }
 
+function Test-UnicodeTextContainsResecSignatureMarker {
+    param([Parameter(Mandatory)][string] $Text)
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return $false
+    }
+
+    return ($Text -match '(?i)ReSecure|resec')
+}
+
 function Test-CapturedEmlContainsResecSignature {
     param([Parameter(Mandatory)][string] $EmlPath)
 
@@ -591,7 +751,32 @@ function Test-CapturedEmlContainsResecSignature {
     }
 
     $text = [System.IO.File]::ReadAllText($EmlPath)
-    return ($text -match '(?i)ReSecure|resec')
+    if (Test-UnicodeTextContainsResecSignatureMarker -Text $text) {
+        return $true
+    }
+
+    # Core plain-text mail signatures are usually in a base64-encoded text/plain part; raw .eml rarely contains literal "Resec".
+    $plainB64Blocks = [regex]::Matches(
+        $text,
+        '(?is)Content-Type:\s*text/plain[^\r\n]*\r?\n(?:Content-[^\r\n]+\r?\n)*\r?\n([A-Za-z0-9+/=\r\n]+?)(?:\r?\n--|\r?\n\r?\n[A-Z]|$)')
+    foreach ($match in $plainB64Blocks) {
+        $b64 = ($match.Groups[1].Value -replace '\s', '')
+        if ([string]::IsNullOrWhiteSpace($b64) -or ($b64.Length % 4) -ne 0) {
+            continue
+        }
+
+        try {
+            $decoded = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+            if (Test-UnicodeTextContainsResecSignatureMarker -Text $decoded) {
+                return $true
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $false
 }
 
 function Invoke-SendEmlToAgent {
