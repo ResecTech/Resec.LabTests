@@ -270,6 +270,9 @@ $selectedScenarios = switch ($Scenarios) {
 }
 
 try {
+    $MailAgentDebugBaseUrl = Get-MailAgentDebugBaseUrl -Override $MailAgentDebugBaseUrl
+    $CoreDebugBaseUrl = Get-MailAgentCoreDebugBaseUrl -Override $CoreDebugBaseUrl
+
     $testFilesRoot = Resolve-MailAgentE2eTestFilesRoot -CallingScriptRoot $PSScriptRoot
     $attachFolder = Get-MailAgentE2eAttachmentFolder -TestFilesRoot $testFilesRoot
 

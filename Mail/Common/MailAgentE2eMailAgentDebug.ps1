@@ -537,14 +537,15 @@ function Test-MailAgentLogTailShowsPolicyApplyStalled {
 
 function Wait-MailAgentE2ePolicyAppliedInLog {
     param(
-        [Parameter(Mandatory)]
-        [string] $BaseUrl,
+        [string] $BaseUrl = '',
         [int] $TimeoutSec = 90,
         [int] $TailLineCount = 400,
         [int] $ProgressIntervalSec = 5,
         [string] $CoreDebugHookUrl = '',
         [string] $TestId = 'MA-01'
     )
+
+    $BaseUrl = Get-MailAgentDebugBaseUrl -Override $BaseUrl
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
     $nextProgress = [DateTimeOffset]::UtcNow
@@ -575,14 +576,15 @@ function Wait-MailAgentE2ePolicyAppliedInLog {
 
 function Ensure-MailAgentE2eLabPolicyOnAgent {
     param(
-        [Parameter(Mandatory)]
-        [string] $BaseUrl,
+        [string] $BaseUrl = '',
         [Parameter(Mandatory)]
         [string] $HookUrl,
         [string] $TestId = 'MA-01',
         [int] $InitialWaitSec = 20,
         [int] $AfterNudgeWaitSec = 90
     )
+
+    $BaseUrl = Get-MailAgentDebugBaseUrl -Override $BaseUrl
 
     Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark 'policy | wait for first connect apply (no nudge yet)' `
         -CoreDebugHookUrl $HookUrl -MailAgentDebugUrl $BaseUrl
@@ -607,12 +609,13 @@ function Ensure-MailAgentE2eLabPolicyOnAgent {
 
 function Assert-MailAgentE2ePolicyFromAgentLog {
     param(
-        [Parameter(Mandatory)]
-        [string] $BaseUrl,
+        [string] $BaseUrl = '',
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $TailLineCount = 400
     )
+
+    $BaseUrl = Get-MailAgentDebugBaseUrl -Override $BaseUrl
 
     $log = Get-MailAgentDebugLogPathEvidence -BaseUrl $BaseUrl
     if ([string]::IsNullOrWhiteSpace($log) -or -not (Test-Path -LiteralPath $log)) {
