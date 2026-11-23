@@ -51,6 +51,15 @@ cd <Resec.LabTests>\Core
 
 Policy: `Policies\NCP7360-portal-encrypted-archive-block.importpolicies.json` (block archive on disallowed embedded files, sanitization report for encrypted/blocked, unknown types blocked). Enables **Portal_Enabled** via `importsystemproperties` (uses existing **Portal_Secret** for `/v1/portal` `apiToken`, or sets a lab fallback when empty). Builds an AES-encrypted zip at runtime (password **1111**, see `Fixtures\Blocked\Encrypted\NCP-7360\manifest.json`), runs debug **sanitize**, submits the password through **`/v1/portal/submit-file-data`**, and asserts **`/v1/portal/file-data`** is **Blocked**, not **Passed** — reproduces [NCP-7360](https://resec.atlassian.net/browse/NCP-7360) until Core/portal outcome bubbling is fixed.
 
+## NCP-7400 — SanitizationDetails disk retention
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7400-SanitizationDetailsDiskRetention.ps1
+```
+
+Seeds an old `TempFiles\SanitizationDetails` tree, imports retention/maintenance/**File System** storage props, restarts Core from **`RESEC_CORE_EXE_LOCATION`** when `runscheduledtask` is missing on the listening host, runs **`runscheduledtask`** (`CleanSanitizationsRelatedTables`), and asserts the old folder is removed.
+
 ## NCP-7374 — Cross-cluster temp file (`sanitizecrosscluster`)
 
 ```powershell

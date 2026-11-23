@@ -78,7 +78,37 @@ function Invoke-CoreE2eRestMethod {
         $irmParams.ContentType = $ContentType
     }
 
-    return Invoke-RestMethod @irmParams
+    try {
+        return Invoke-RestMethod @irmParams
+    }
+    catch {
+        $detail = $null
+        if ($_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$_.ErrorDetails.Message)) {
+            $detail = [string]$_.ErrorDetails.Message
+        }
+        elseif ($_.Exception -is [System.Net.WebException]) {
+            $response = $_.Exception.Response
+            if ($response) {
+                try {
+                    $stream = $response.GetResponseStream()
+                    if ($stream) {
+                        $reader = New-Object System.IO.StreamReader($stream)
+                        $detail = $reader.ReadToEnd()
+                        $reader.Dispose()
+                    }
+                }
+                catch {
+                    # Best-effort only.
+                }
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($detail)) {
+            throw "HTTP request to $Uri failed: $detail"
+        }
+
+        throw
+    }
 }
 
 function Invoke-CoreE2eDebugHook {
@@ -90,6 +120,7 @@ function Invoke-CoreE2eDebugHook {
         [hashtable] $BodyObject,
         [string] $Message,
         [string] $SubjectContains,
+        [string] $ScheduledTaskName,
         [int] $TimeoutSec = 300
     )
 
@@ -112,6 +143,9 @@ function Invoke-CoreE2eDebugHook {
     }
     if (-not [string]::IsNullOrWhiteSpace($SubjectContains)) {
         $queryParts += 'subjectContains=' + [uri]::EscapeDataString($SubjectContains)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ScheduledTaskName)) {
+        $queryParts += 'scheduledTaskName=' + [uri]::EscapeDataString($ScheduledTaskName)
     }
 
     $uri = '{0}{1}{2}' -f $HookUrl, $separator, ($queryParts -join '&')
@@ -465,6 +499,78 @@ function Test-CoreE2eProcessRunning {
     return $null -ne (Get-Process -Name 'Resec.Core' -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
+function Stop-CoreE2eServerProcesses {
+    $names = @('Resec.Core', 'Resec.Core.Cdr.Worker')
+    foreach ($name in $names) {
+        $procs = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+        if ($procs.Count -gt 0) {
+            Write-CoreE2eStep "Stopping $name ($($procs.Count) process(es)) for lab Core restart"
+            $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Start-Sleep -Seconds 3
+}
+
+function Test-CoreE2eDebugHookSupportsRunScheduledTask {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl
+    )
+
+    try {
+        $null = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'runscheduledtask' -TimeoutSec 90
+        return $true
+    }
+    catch {
+        $message = $_.Exception.Message
+        if ($message -match 'requires scheduledTaskName') {
+            return $true
+        }
+
+        if ($message -match 'Unknown debug command') {
+            return $false
+        }
+
+        throw
+    }
+}
+
+function Ensure-CoreE2eServerWithRunScheduledTaskHook {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [string] $CoreExe = '',
+        [switch] $SkipLocalCoreRestart
+    )
+
+    if ($SkipLocalCoreRestart) {
+        if (-not (Test-CoreE2eDebugHookSupportsRunScheduledTask -HookUrl $HookUrl)) {
+            throw 'runscheduledtask is not available on the running Core. Rebuild Resec.Core.Server, set RESEC_CORE_EXE_LOCATION to the new Resec.Core.exe, and re-run without -SkipLocalCoreRestart.'
+        }
+
+        return
+    }
+
+    if (Test-CoreE2eDebugHookSupportsRunScheduledTask -HookUrl $HookUrl) {
+        Write-CoreE2eStep 'Core debug hook supports runscheduledtask'
+        return
+    }
+
+    $coreExePath = Resolve-CoreE2eCoreExePath -Override $CoreExe
+    Write-CoreE2eStep "runscheduledtask missing on listening Core; restarting lab Core from: $coreExePath"
+    Stop-CoreE2eServerProcesses
+    Ensure-CoreE2eCoreAppSettingsBesideExe -ExePath $coreExePath
+    Start-CoreE2eServerProcess -ExePath $coreExePath
+    Wait-CoreE2eReady -HookUrl $HookUrl -CoreExe $coreExePath -SkipInitialAutoStart -SkipAutoStartCore -TimeoutSec 600 | Out-Null
+
+    if (-not (Test-CoreE2eDebugHookSupportsRunScheduledTask -HookUrl $HookUrl)) {
+        throw "Core at '$coreExePath' does not expose runscheduledtask. Build Resec.Core.Server from the NCP-7400 branch and point RESEC_CORE_EXE_LOCATION at Resec.Core.exe."
+    }
+
+    Write-CoreE2eStep 'Core restarted with runscheduledtask support'
+}
+
 function Write-CoreE2eStep {
     param([Parameter(Mandatory)][string] $Message)
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] $Message"
@@ -709,6 +815,21 @@ function Pop-CoreE2eSystemPropertiesState {
     $pop = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'popsystempropertystate'
     Assert-CoreE2eDebugHookResponse -Response $pop -Step 'popsystempropertystate'
     return $pop
+}
+
+function Invoke-CoreE2eRunScheduledTask {
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $ScheduledTaskName,
+        [int] $TimeoutSec = 600
+    )
+
+    $response = Invoke-CoreE2eDebugHook -HookUrl $HookUrl -Command 'runscheduledtask' `
+        -ScheduledTaskName $ScheduledTaskName -TimeoutSec $TimeoutSec
+    Assert-CoreE2eDebugHookResponse -Response $response -Step 'runscheduledtask'
+    return $response
 }
 
 function Import-CoreE2eSystemProperties {
