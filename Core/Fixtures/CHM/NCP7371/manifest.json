@@ -1,0 +1,23 @@
+{
+  "fixtures": [
+    {
+      "file": "IMJPCL.CHM",
+      "label": "imjpcl",
+      "forbiddenOutcomes": [
+        "OutcomeBlockedTransformationFailed"
+      ],
+      "forbiddenOutcomeDetailsPatterns": [
+        "Failed creating temp folder",
+        "_tmp\\.bin",
+        "Cannot create .*_tmp\\.bin"
+      ],
+      "expectedOutcomes": [
+        "OutcomePassed",
+        "OutcomeModified",
+        "OutcomeReconstructed",
+        "OutcomePartiallyProcessed"
+      ],
+      "requirePdfOutput": true
+    }
+  ]
+}
