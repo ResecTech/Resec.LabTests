@@ -28,6 +28,8 @@ $commonRoot = Join-Path (Split-Path $CallingScriptRoot -Parent) 'Common'
 foreach ($name in @(
         'RestApiE2ePs51.ps1',
         'RestApiE2eCorePolicy.ps1',
+        'RestApiE2eAuthExpiration.ps1',
+        'RestApiE2eTestLifecycle.ps1',
         'Report-RestApiTestPlatformResult.ps1'
     )) {
     $path = Join-Path $commonRoot $name

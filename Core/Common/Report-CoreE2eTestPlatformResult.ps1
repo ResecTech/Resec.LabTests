@@ -326,7 +326,11 @@ function Complete-ScanAgentE2eTest {
     try {
         $reportMessage = $FailureMessage
         if (-not $Passed) {
-            $reportMessage = Merge-ScanAgentE2eFailureMessageWithPaths -FailureMessage $FailureMessage `
+            if ([string]::IsNullOrWhiteSpace($reportMessage)) {
+                $reportMessage = 'Scenario failed (no failure message provided).'
+            }
+
+            $reportMessage = Merge-ScanAgentE2eFailureMessageWithPaths -FailureMessage $reportMessage `
                 -EvidencePathsOnFailure $EvidencePathsOnFailure
         }
 
@@ -376,8 +380,13 @@ function Invoke-ScanAgentE2eTestPlatformReportingFinally {
             $evidence = @($EvidencePathsOnFailure | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         }
 
+        $failureForReport = $FailureMessage
+        if (-not $Passed -and [string]::IsNullOrWhiteSpace($failureForReport)) {
+            $failureForReport = 'Scenario failed (no failure message provided).'
+        }
+
         Complete-ScanAgentE2eTest -TestId $TestId -TestTitle $TestTitle -Passed:$Passed `
-            -FailureMessage $FailureMessage -StartedAtUtc $started -EvidencePathsOnFailure $evidence `
+            -FailureMessage $failureForReport -StartedAtUtc $started -EvidencePathsOnFailure $evidence `
             -RunLogPath $RunLogPath -EvidenceZipPath $EvidenceZipPath
     }
     finally {

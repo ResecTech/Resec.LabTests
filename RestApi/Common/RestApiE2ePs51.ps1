@@ -41,11 +41,44 @@ Use Resec.Agent.RestAPI.exe in the same folder, set RESEC_RESTAPI_EXE_LOCATION t
     throw "REST API launch path must be a .exe or .dll with a sibling apphost: $full"
 }
 
+function Get-RestApiE2eNewestRepoBuildExe {
+    param([string] $RepoRoot = '')
+
+    if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+        $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\Resec.Agent.REST_API'))
+    }
+    else {
+        $repoRoot = [System.IO.Path]::GetFullPath($RepoRoot.Trim())
+    }
+
+    $binRoot = Join-Path $repoRoot 'src\Resec.Agent.RestAPI\bin'
+    if (-not (Test-Path -LiteralPath $binRoot -PathType Container)) {
+        return $null
+    }
+
+    $candidates = @(Get-ChildItem -LiteralPath $binRoot -Recurse -Filter 'Resec.Agent.RestAPI.exe' -File -ErrorAction SilentlyContinue)
+    if ($candidates.Count -eq 0) {
+        return $null
+    }
+
+  return ($candidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName
+}
+
 function Resolve-RestApiE2eExePath {
-    param([string] $Override = '')
+    param(
+        [string] $Override = '',
+        [switch] $PreferRepoBuild
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($Override)) {
         return (Resolve-RestApiE2eLaunchPath -CandidatePath $Override)
+    }
+
+    if ($PreferRepoBuild) {
+        $repoBuild = Get-RestApiE2eNewestRepoBuildExe
+        if (-not [string]::IsNullOrWhiteSpace($repoBuild)) {
+            return (Resolve-RestApiE2eLaunchPath -CandidatePath $repoBuild)
+        }
     }
 
     $fromEnv = Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
@@ -53,7 +86,23 @@ function Resolve-RestApiE2eExePath {
         'LAB_RESTAPI_EXE'
     )
     if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
-        return (Resolve-RestApiE2eLaunchPath -CandidatePath $fromEnv)
+        $resolvedEnv = Resolve-RestApiE2eLaunchPath -CandidatePath $fromEnv
+        $repoBuild = Get-RestApiE2eNewestRepoBuildExe
+        if (-not [string]::IsNullOrWhiteSpace($repoBuild)) {
+            $envWrite = (Get-Item -LiteralPath $resolvedEnv).LastWriteTimeUtc
+            $repoWrite = (Get-Item -LiteralPath $repoBuild).LastWriteTimeUtc
+            if ($repoWrite -gt $envWrite) {
+                Write-Warning "RESEC_RESTAPI_EXE_LOCATION is older than repo build; using '$repoBuild' (set -RestApiExe to pin)."
+                return (Resolve-RestApiE2eLaunchPath -CandidatePath $repoBuild)
+            }
+        }
+
+        return $resolvedEnv
+    }
+
+    $repoBuild = Get-RestApiE2eNewestRepoBuildExe
+    if (-not [string]::IsNullOrWhiteSpace($repoBuild)) {
+        return (Resolve-RestApiE2eLaunchPath -CandidatePath $repoBuild)
     }
 
     return (Resolve-RestApiE2eLaunchPath -CandidatePath (Get-RestApiE2eInstalledExeDefaultPath))
@@ -79,6 +128,8 @@ public class RestApiE2eTrustAllCerts : ICertificatePolicy {
 }
 
 function Stop-RestApiE2eProcesses {
+    param([int] $SettleMilliseconds = 2000)
+
     foreach ($name in @('Resec.Agent.RestAPI.exe', 'Resec.Agent.RestAPI')) {
         Get-Process -Name ($name -replace '\.exe$', '') -ErrorAction SilentlyContinue |
             ForEach-Object {
@@ -87,14 +138,238 @@ function Stop-RestApiE2eProcesses {
             }
     }
 
-    Start-Sleep -Seconds 2
+    if ($SettleMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $SettleMilliseconds
+    }
+}
+
+function Set-RestApiE2eProcessEnvironment {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable] $Values
+    )
+
+    $script:RestApiE2eSavedProcessEnvironment = @{}
+    foreach ($key in $Values.Keys) {
+        $script:RestApiE2eSavedProcessEnvironment[$key] = [Environment]::GetEnvironmentVariable([string]$key, 'Process')
+        $newValue = $Values[$key]
+        if ($null -eq $newValue) {
+            [Environment]::SetEnvironmentVariable([string]$key, $null, 'Process')
+        }
+        else {
+            [Environment]::SetEnvironmentVariable([string]$key, [string]$newValue, 'Process')
+        }
+    }
+}
+
+function Restore-RestApiE2eProcessEnvironment {
+    if (-not $script:RestApiE2eSavedProcessEnvironment) {
+        return
+    }
+
+    foreach ($key in $script:RestApiE2eSavedProcessEnvironment.Keys) {
+        $prior = $script:RestApiE2eSavedProcessEnvironment[$key]
+        if ($null -eq $prior) {
+            [Environment]::SetEnvironmentVariable([string]$key, $null, 'Process')
+        }
+        else {
+            [Environment]::SetEnvironmentVariable([string]$key, [string]$prior, 'Process')
+        }
+    }
+
+    $script:RestApiE2eSavedProcessEnvironment = $null
+}
+
+function Wait-RestApiE2eHttpsListening {
+    param(
+        [string] $BaseUrl = $script:RestApiE2eDefaultHttpsBase,
+        [int] $TimeoutSec = 60
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $tlsPort = 8443
+    if ($BaseUrl -match ':(\d+)') {
+        $tlsPort = [int]$Matches[1]
+    }
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Get-NetTCPConnection -LocalPort $tlsPort -State Listen -ErrorAction SilentlyContinue) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+
+    throw "Timed out waiting for REST API to listen on port $tlsPort (${TimeoutSec}s)."
+}
+
+function Get-RestApiE2eProbeFromWebCmdletError {
+    param(
+        [Parameter(Mandatory)]
+        $ErrorRecord
+    )
+
+    $body = ''
+    if ($ErrorRecord.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$ErrorRecord.ErrorDetails.Message)) {
+        $body = [string]$ErrorRecord.ErrorDetails.Message
+    }
+
+    $resp = $ErrorRecord.Exception.Response
+    if ($null -eq $resp) {
+        return $null
+    }
+
+    $status = 0
+    if ($resp -is [System.Net.Http.HttpResponseMessage]) {
+        $status = [int]$resp.StatusCode
+        if ([string]::IsNullOrWhiteSpace($body)) {
+            try {
+                $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            }
+            catch {
+                if ([string]::IsNullOrWhiteSpace($body)) {
+                    $body = $ErrorRecord.Exception.Message
+                }
+            }
+        }
+    }
+    else {
+        $status = [int]$resp.StatusCode
+        if ([string]::IsNullOrWhiteSpace($body)) {
+            try {
+                $stream = $resp.GetResponseStream()
+                if ($stream) {
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    try {
+                        $body = [string]$reader.ReadToEnd()
+                    }
+                    finally {
+                        $reader.Dispose()
+                    }
+                }
+            }
+            catch {
+                if ([string]::IsNullOrWhiteSpace($body)) {
+                    $body = $ErrorRecord.Exception.Message
+                }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        StatusCode = $status
+        Body       = $body
+    }
+}
+
+function Invoke-RestApiE2eIsConnectedProbe {
+    param(
+        [string] $BaseUrl = $script:RestApiE2eDefaultHttpsBase,
+        [string] $AuthorizationToken = '',
+        [int] $TimeoutSec = 8
+    )
+
+    $uri = ($BaseUrl.TrimEnd('/')) + '/api/v2/IsConnected'
+    $headers = @{}
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $headers['User-Agent'] = 'Resec.LabTests.RestApiE2e'
+    }
+
+    if ($null -ne $AuthorizationToken) {
+        $headers['AuthorizationToken'] = $AuthorizationToken
+    }
+
+    $iwrParams = @{
+        Uri         = $uri
+        Method      = 'Get'
+        Headers     = $headers
+        TimeoutSec  = $TimeoutSec
+    }
+
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $iwrParams.SkipCertificateCheck = $true
+        $iwrParams.UseBasicParsing = $true
+    }
+
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        Enable-RestApiE2eTlsBypass
+        $iwrParams.UseBasicParsing = $true
+    }
+
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $response = Invoke-WebRequest @iwrParams -SkipHttpErrorCheck
+        return [PSCustomObject]@{
+            StatusCode = [int]$response.StatusCode
+            Body       = [string]$response.Content
+        }
+    }
+
+    try {
+        $response = Invoke-WebRequest @iwrParams
+        return [PSCustomObject]@{
+            StatusCode = [int]$response.StatusCode
+            Body       = [string]$response.Content
+        }
+    }
+    catch {
+        $parsed = Get-RestApiE2eProbeFromWebCmdletError -ErrorRecord $_
+        if ($parsed) {
+            return $parsed
+        }
+
+        throw
+    }
+}
+
+function Assert-RestApiE2eIsConnectedAuth {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Allow', 'Unauthorized', 'UnauthorizedExpired')]
+        [string] $Expect,
+        [string] $BaseUrl = $script:RestApiE2eDefaultHttpsBase,
+        [string] $AuthorizationToken = '',
+        [string] $Context = ''
+    )
+
+    $probe = Invoke-RestApiE2eIsConnectedProbe -BaseUrl $BaseUrl -AuthorizationToken $AuthorizationToken
+    $label = if ([string]::IsNullOrWhiteSpace($Context)) { 'IsConnected probe' } else { $Context }
+
+    switch ($Expect) {
+        'Allow' {
+            if ($probe.StatusCode -ne 200) {
+                throw "$label expected HTTP 200; got $($probe.StatusCode). Body: $($probe.Body)"
+            }
+
+            if ($probe.Body -notmatch '(?i)true') {
+                throw "$label expected body 'true'; got: $($probe.Body)"
+            }
+        }
+        'Unauthorized' {
+            if ($probe.StatusCode -ne 401) {
+                throw "$label expected HTTP 401; got $($probe.StatusCode). Body: $($probe.Body)"
+            }
+        }
+        'UnauthorizedExpired' {
+            if ($probe.StatusCode -ne 401) {
+                throw "$label expected HTTP 401 (expired); got $($probe.StatusCode). Body: $($probe.Body)"
+            }
+
+            if ($probe.Body -notmatch '(?i)expired') {
+                throw "$label expected 'expired' in response body; got: $($probe.Body)"
+            }
+        }
+    }
 }
 
 function Start-RestApiE2eProcess {
     param(
         [Parameter(Mandatory)]
-        [string] $ExePath
+        [string] $ExePath,
+        [hashtable] $ProcessEnvironment = @{}
     )
+
+    if ($ProcessEnvironment.Count -gt 0) {
+        Set-RestApiE2eProcessEnvironment -Values $ProcessEnvironment
+    }
 
     $launchPath = Resolve-RestApiE2eLaunchPath -CandidatePath $ExePath
     $workDir = Split-Path -Parent $launchPath
@@ -103,7 +378,14 @@ function Start-RestApiE2eProcess {
     }
 
     Write-Host "[RestApiE2e] Starting: $launchPath"
-    return Start-Process -FilePath $launchPath -WorkingDirectory $workDir -PassThru
+    try {
+        return Start-Process -FilePath $launchPath -WorkingDirectory $workDir -PassThru
+    }
+    finally {
+        if ($ProcessEnvironment.Count -gt 0) {
+            Restore-RestApiE2eProcessEnvironment
+        }
+    }
 }
 
 function Get-RestApiE2eLogFiles {
@@ -233,12 +515,14 @@ function Wait-RestApiE2eIsConnected {
     param(
         [string] $BaseUrl = $script:RestApiE2eDefaultHttpsBase,
         [string] $AuthorizationToken = $script:RestApiE2eDefaultAuthToken,
-        [int] $TimeoutSec = 60
+        [int] $TimeoutSec = 60,
+        [int] $PollIntervalMs = 1000,
+        [int] $RequestTimeoutSec = 8
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
     $uri = ($BaseUrl.TrimEnd('/')) + '/api/v2/IsConnected'
-    $portDeadline = [DateTimeOffset]::UtcNow.AddSeconds([Math]::Min(30, $TimeoutSec))
+    $portDeadline = [DateTimeOffset]::UtcNow.AddSeconds([Math]::Min(20, $TimeoutSec))
     $tlsPort = 8443
     if ($BaseUrl -match ':(\d+)') {
         $tlsPort = [int]$Matches[1]
@@ -248,7 +532,7 @@ function Wait-RestApiE2eIsConnected {
         if (Get-NetTCPConnection -LocalPort $tlsPort -State Listen -ErrorAction SilentlyContinue) {
             break
         }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 250
     }
 
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
@@ -257,7 +541,7 @@ function Wait-RestApiE2eIsConnected {
                 Uri               = $uri
                 Method            = 'Get'
                 Headers           = @{ AuthorizationToken = $AuthorizationToken }
-                TimeoutSec        = 10
+                TimeoutSec        = $RequestTimeoutSec
                 UseBasicParsing   = $true
             }
 
@@ -277,7 +561,7 @@ function Wait-RestApiE2eIsConnected {
             # wait for Kestrel + Gateway init
         }
 
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds $PollIntervalMs
     }
 
     throw "Timed out waiting for GET $uri to return true (${TimeoutSec}s)."

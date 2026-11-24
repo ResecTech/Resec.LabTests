@@ -106,7 +106,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 
 | # | ID | Steps |
 |---|-----|-------|
-| 1 | RA-20 | **API keys & platform** —<br><br>**A.** **Do:** Configure **multiple API keys** in WMC system property (NCP-5048 / NCP-5903); call `IsConnected` and one sanitization with each key. **Expect:** All keys accepted; invalid key rejected.<br><br>**B.** **Do:** Install previous-train REST API against current Core; run **RA-02 A** sync. **Expect:** WMC Pass.<br><br>**C.** **Do:** Compare Swagger **v2** and **v3** operation count to this doc **API surface** table after upgrade. **Expect:** No undocumented removed routes without release notes.<br><br>**D.** **Do:** *(When NCP-7384 implemented)* Inspect health/UI for **service token expiration** warning before expiry. **Expect:** Alert visible within configured lead time. |
+| 1 | RA-20 | **API keys & platform** —<br><br>**A.** **Do:** Configure **multiple API keys** in WMC system property (NCP-5048 / NCP-5903); call `IsConnected` and one sanitization with each key. **Expect:** All keys accepted; invalid key rejected.<br><br>**B.** **Do:** Install previous-train REST API against current Core; run **RA-02 A** sync. **Expect:** WMC Pass.<br><br>**C.** **Do:** Compare Swagger **v2** and **v3** operation count to this doc **API surface** table after upgrade. **Expect:** No undocumented removed routes without release notes.<br><br>**D.** **Do:** Run **`P1\RA-7384-RestApiTokenExpiration.ps1`** or manually set key/token expiration and probe `IsConnected`. **Expect:** Expired → **401** with *expired*; valid → **200** / `true`. *(Health/UI warning before expiry is follow-up.)* |
 | 2 | RA-21 | **Encoding & misc regressions** —<br><br>**A.** **Do:** Sync upload file with **URL-encoded Hebrew** (or other non-ASCII) filename (NCP-2779). **Expect:** WMC and download name decoded correctly.<br><br>**B.** **Do:** `getPolicyPart` after policy edit requiring RDP exclusion facet (NCP-6633 / CC-1204 workaround class). **Expect:** Client honors exclusion without crash.<br><br>**C.** **Do:** Guest / `promptForUserOnFirstConnection` matrix if enabled (NCP-6661). **Expect:** Login UI completes — no infinite hang. |
 
 ---
@@ -155,7 +155,7 @@ Use when scoring risk for a build touching `Resec.Agent.REST_API` ([commits](htt
 | NCP-6334 | Success when save fails | RA-14 C |
 | NCP-5903 / NCP-5048 | Custom / multiple API keys | RA-20 A |
 | NCP-5985 / v3 abort | Async abort races | RA-12 C, RA-15 D |
-| NCP-7384 | Token expiration health *(pending)* | RA-20 D |
+| NCP-7384 | Token expiration (keys + appsettings) | RA-20 D, **RA-7384** automated |
 
 Representative GitHub fixes (same window): `0e3b41e` NCP-7372 registry; `733822d` NCP-6301 jobs; `b1d0788` NCP-6225 connection crash; `404c5c8` NCP-6560 Tags NRE; `6699b6f`/`76e738d` NCP-7216 v3; `af46d3f` v3 abort/cancel; `a0e622b` NCP-7266 submitUrl tags; `5b57e38` NCP-6133 temp drive.
 
