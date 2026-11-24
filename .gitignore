@@ -4,3 +4,4 @@ config/lab.local.json
 *.user
 azurite/
 .DS_Store
+.gitnexus
