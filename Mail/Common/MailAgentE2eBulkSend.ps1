@@ -32,8 +32,8 @@ function Write-MailAgentE2eBulkPrerequisitesHelp {
     Write-Host ''
     Write-Host 'Or set MAIL_E2E_SIMPLE_MAIL_SERVER_EXE / MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE, or pass explicit -Path parameters.'
     Write-Host 'Typical build outputs:'
-    Write-Host "  $(Join-Path $labTestsRoot 'Tools\SimpleMailServer\bin\x64\Debug\net10.0-windows7.0\win-x64\SimpleMailServer.exe')"
-    Write-Host "  $(Join-Path $repoRoot 'SendBulkAttachmentMail\bin\Debug\net10.0-windows7.0\win-x64\SendBulkAttachmentMail.exe')"
+    Write-Host "  $(Join-Path $labTestsRoot 'Tools\SimpleMailServer\bin\x64\Debug\net11.0-windows7.0\win-x64\SimpleMailServer.exe')"
+    Write-Host "  $(Join-Path $repoRoot 'SendBulkAttachmentMail\bin\Debug\net11.0-windows7.0\win-x64\SendBulkAttachmentMail.exe')"
     Write-Host ''
     Write-Host 'Repo fixtures (or set MAILAGENT_TEST_FILES_ROOT):'
     Write-Host "  $(Join-Path $testTreeRoot 'Config\simple-mail-server.appsettings.json')"

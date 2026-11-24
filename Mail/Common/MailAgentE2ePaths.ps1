@@ -84,12 +84,12 @@ function Get-MailAgentE2eToolPathCandidates {
 
     foreach ($toolDir in $toolDirectories) {
         foreach ($configuration in @('Debug', 'Release')) {
-            $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
-            $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\$ExecutableFileName"))
+            $candidates.Add((Join-Path $toolDir "bin\$configuration\net11.0-windows7.0\win-x64\$ExecutableFileName"))
+            $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net11.0-windows7.0\win-x64\$ExecutableFileName"))
             $candidates.Add((Join-Path $toolDir "bin\publish\single-file\$ExecutableFileName"))
             if ($ToolName -eq 'SendEml') {
-                $candidates.Add((Join-Path $toolDir "bin\$configuration\net10.0\$ExecutableFileName"))
-                $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net10.0\$ExecutableFileName"))
+                $candidates.Add((Join-Path $toolDir "bin\$configuration\net11.0\$ExecutableFileName"))
+                $candidates.Add((Join-Path $toolDir "bin\x64\$configuration\net11.0\$ExecutableFileName"))
             }
         }
     }
@@ -341,8 +341,8 @@ function Get-MailAgentE2eAgentExePathCandidates {
     $repoRoot = Get-MailAgentE2eRepoRoot -CallingScriptRoot $CallingScriptRoot
     $productDir = Join-Path $repoRoot 'src'
     foreach ($configuration in @('Debug', 'Release')) {
-        $candidates.Add((Join-Path $productDir "bin\$configuration\net10.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
-        $candidates.Add((Join-Path $productDir "bin\x64\$configuration\net10.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
+        $candidates.Add((Join-Path $productDir "bin\$configuration\net11.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
+        $candidates.Add((Join-Path $productDir "bin\x64\$configuration\net11.0-windows7.0\win-x64\Resec.Agent.Mail.exe"))
         $candidates.Add((Join-Path $productDir "bin\publish\single-file\Resec.Agent.Mail.exe"))
     }
 

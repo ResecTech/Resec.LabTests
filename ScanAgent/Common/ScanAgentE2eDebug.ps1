@@ -43,10 +43,10 @@ function Resolve-ScanAgentDebugPath {
     $candidates.Add((Join-Path $CallingScriptRoot '..\ScanAgentDebug.exe'))
   # Prefer x64 build output (solution default) so co-located Resec.Agent.ScanAgent.exe matches the debug client.
     foreach ($configuration in @('Debug', 'Release')) {
-        $candidates.Add((Join-Path $agentBin "x64\$configuration\net10.0-windows\ScanAgentDebug.exe"))
-        $candidates.Add((Join-Path $debugClientBin "x64\$configuration\net10.0-windows\ScanAgentDebug.exe"))
-        $candidates.Add((Join-Path $agentBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
-        $candidates.Add((Join-Path $debugClientBin "$configuration\net10.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $agentBin "x64\$configuration\net11.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $debugClientBin "x64\$configuration\net11.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $agentBin "$configuration\net11.0-windows\ScanAgentDebug.exe"))
+        $candidates.Add((Join-Path $debugClientBin "$configuration\net11.0-windows\ScanAgentDebug.exe"))
     }
 
     $checked = @{}
