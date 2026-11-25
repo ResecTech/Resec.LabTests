@@ -6,14 +6,14 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 
 ## Quick start (new lab machine)
 
-1. Clone this repo and each product repo you need (paths are yours to choose).
+1. Clone this repo (and product repos only if you develop tests or build tools from source).
 2. Create local config:
    ```powershell
    cd C:\Work\ResecTech\Resec.LabTests
    .\scripts\Initialize-LabConfig.ps1
    notepad .\config\lab.local.json
    ```
-3. Set `products.*.repoRoot` to the git roots of Scan Agent, Core, Mail, and/or FileTypeDetection.
+3. For source builds or legacy resolution, set `products.*.repoRoot` in `lab.local.json`; catalog **Deploy** does not require them.
 4. **Lab helper EXEs** — checked in under `Tools\runtime\win-x64\` (no SDK required). Refresh with `.\scripts\Publish-LabRuntimeTools.ps1` when tool sources change.
 5. **Product agents** — download from Lab Test Runner **Product catalog** and **Deploy** (no local product build required on the lab VM).
 6. Run a test, for example:
