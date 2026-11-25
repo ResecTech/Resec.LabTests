@@ -100,14 +100,22 @@ function Invoke-CoreE2ePortalRestMethod {
         [ValidateSet('Get', 'Post')]
         [string] $Method = 'Get',
         [hashtable] $BodyObject,
+        [hashtable] $ExtraHeaders,
         [int] $TimeoutSec = 120
     )
 
     $uri = '{0}{1}' -f $BaseUrl.TrimEnd('/'), $Path
+    $headers = @{ apiToken = $PortalApiToken }
+    if ($ExtraHeaders) {
+        foreach ($key in $ExtraHeaders.Keys) {
+            $headers[$key] = $ExtraHeaders[$key]
+        }
+    }
+
     $irmParams = @{
         Uri        = $uri
         Method     = $Method
-        Headers    = @{ apiToken = $PortalApiToken }
+        Headers    = $headers
         TimeoutSec = $TimeoutSec
     }
 

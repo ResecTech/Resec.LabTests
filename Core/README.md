@@ -107,6 +107,15 @@ WMC REST login defaults to **resec_admin** / **resec_admin** (same as Core `Admi
 
 Fixture: `..\Fixtures\Mail\NCP-7362\` (Jira `RDP verification.eml` — blank **From**, **To** `ben@resec.co`). Reuses the NCP-7344 no-CDR lab policy import. After debug **sanitize**, logs into WebMC REST and asserts **`POST /v1/sanitizations/email`** returns empty **mailFromAddress** and does not duplicate the recipient into **From** ([NCP-7362](https://resec.atlassian.net/browse/NCP-7362)).
 
+## NCP-7408 — resubmit with policy bypasses assignment rules
+
+```powershell
+cd <Resec.LabTests>\Core
+.\NCP7408-ResubmitPolicyBypass.ps1
+```
+
+Imports two policies (block scripts vs allow scripts) and a **file_path** assignment rule that maps `.ps1` to the block policy. Debug **sanitize** with the allow policy id is overridden by assignment rules and **blocks**; **`GET /v1/sanitizations/workflow-actions/perform`** resubmit with the allow policy id must pass and log **`PolicyConditions: Skipping assignment rules for resubmit`** ([NCP-7408](https://resec.atlassian.net/browse/NCP-7408)).
+
 ## NCP-7365 — policy assignment conditions (simulate + file size)
 
 ```powershell

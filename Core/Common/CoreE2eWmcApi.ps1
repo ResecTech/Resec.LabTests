@@ -139,11 +139,168 @@ function Invoke-CoreE2eWmcRestMethod {
         [ValidateSet('Get', 'Post')]
         [string] $Method = 'Get',
         [hashtable] $BodyObject,
+        [hashtable] $ExtraHeaders,
         [int] $TimeoutSec = 120
     )
 
     return Invoke-CoreE2ePortalRestMethod -BaseUrl $BaseUrl -Path $Path -PortalApiToken $ApiToken `
-        -Method $Method -BodyObject $BodyObject -TimeoutSec $TimeoutSec
+        -Method $Method -BodyObject $BodyObject -ExtraHeaders $ExtraHeaders -TimeoutSec $TimeoutSec
+}
+
+# SanitizationWorkflowAction.Resubmit (1 << 1)
+$script:CoreE2eWmcWorkflowActionResubmit = 2
+
+function Invoke-CoreE2eWmcPerformWorkflowAction {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [Parameter(Mandatory)]
+        [string] $ApiToken,
+        [Parameter(Mandatory)]
+        [int] $SanitizationId,
+        [Parameter(Mandatory)]
+        [int] $Action,
+        [int] $PolicyId = 0
+    )
+
+    $query = "sanitizationId=$SanitizationId&action=$Action&resultMsg="
+    if ($PolicyId -gt 0) {
+        $query += "&policyId=$PolicyId"
+    }
+
+    $path = '/v1/sanitizations/workflow-actions/perform?' + $query
+    $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
+        -Path $path -Method Get
+
+    $actionId = [string](Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('actionId', 'ActionId'))
+    if ([string]::IsNullOrWhiteSpace($actionId)) {
+        throw "Perform workflow action returned empty actionId (sanitizationId=$SanitizationId action=$Action)."
+    }
+
+    return $actionId
+}
+
+function Test-CoreE2eWmcWorkflowActionStillPending {
+    param(
+        [Parameter(Mandatory)]
+        $Response
+    )
+
+    $errorText = [string](Get-CoreE2eWmcRestPropertyValue -Object $Response -Names @('error', 'Error'))
+    $resultOk = Get-CoreE2eWmcRestPropertyValue -Object $Response -Names @('result', 'Result')
+
+    if ($errorText -like '*No information*') {
+        return $true
+    }
+
+    if ($resultOk -eq $true -or $resultOk -eq 'True') {
+        $data = Get-CoreE2eWmcRestPropertyValue -Object $Response -Names @('data', 'Data')
+        if ($null -eq $data) {
+            return $true
+        }
+
+        $childId = [int](Get-CoreE2eWmcRestPropertyValue -Object $data -Names @('sanitizationId', 'SanitizationId'))
+        $errorIsInfoOnly = ($errorText -like '*Sanitization info not found*')
+        if ($childId -le 0 -and $errorIsInfoOnly) {
+            return $true
+        }
+
+        return $false
+    }
+
+    if ($resultOk -eq $false -or $resultOk -eq 'False' -or $resultOk -eq 'false') {
+        if ([string]::IsNullOrWhiteSpace($errorText)) {
+            $data = Get-CoreE2eWmcRestPropertyValue -Object $Response -Names @('data', 'Data')
+            if ($null -eq $data) {
+                return $true
+            }
+
+            $childId = [int](Get-CoreE2eWmcRestPropertyValue -Object $data -Names @('sanitizationId', 'SanitizationId'))
+            if ($childId -le 0) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Wait-CoreE2eWmcWorkflowActionResult {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [Parameter(Mandatory)]
+        [string] $ApiToken,
+        [Parameter(Mandatory)]
+        [string] $ActionId,
+        [Parameter(Mandatory)]
+        [int] $SanitizationId,
+        [int] $TimeoutSec = 120,
+        [int] $PollSec = 2
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+    $pollIndex = 0
+    $lastResponseJson = ''
+
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $pollIndex++
+        $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
+            -Path '/v1/sanitizations/workflow-actions/result' -Method Post -ExtraHeaders @{
+                actionId       = $ActionId
+                sanitizationId = [string]$SanitizationId
+            }
+
+        $lastResponseJson = try { $response | ConvertTo-Json -Depth 8 -Compress } catch { [string]$response }
+
+        if (Test-CoreE2eWmcWorkflowActionStillPending -Response $response) {
+            if ($pollIndex -eq 1 -or ($pollIndex % 10) -eq 0) {
+                Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] Workflow poll ${pollIndex}: pending actionId=$ActionId"
+            }
+
+            Start-Sleep -Seconds $PollSec
+            continue
+        }
+
+        $errorText = [string](Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('error', 'Error'))
+        $resultOk = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('result', 'Result')
+
+        if ($resultOk -eq $false -or $resultOk -eq 'False' -or $resultOk -eq 'false') {
+            $data = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('data', 'Data')
+            $dataOutcome = ''
+            if ($null -ne $data) {
+                $dataOutcome = [string](Get-CoreE2eWmcRestPropertyValue -Object $data -Names @('outcome', 'Outcome'))
+            }
+
+            throw "Workflow action $ActionId failed: error='$errorText' dataOutcome='$dataOutcome' response=$lastResponseJson"
+        }
+
+        $data = Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('data', 'Data')
+        if ($null -eq $data) {
+            throw "Workflow action $ActionId completed without data payload. response=$lastResponseJson"
+        }
+
+        return $data
+    }
+
+    throw "Workflow action $ActionId did not complete within ${TimeoutSec}s (last response=$lastResponseJson)."
+}
+
+function Get-CoreE2eSanitizationLogHistory {
+    param(
+        [Parameter(Mandatory)]
+        [string] $BaseUrl,
+        [Parameter(Mandatory)]
+        [string] $ApiToken,
+        [Parameter(Mandatory)]
+        [int] $SanitizationId
+    )
+
+    $path = '/v1/sanitizations/details?sanitizationId={0}' -f $SanitizationId
+    $response = Invoke-CoreE2eWmcRestMethod -BaseUrl $BaseUrl -ApiToken $ApiToken `
+        -Path $path -Method Get
+
+    return [string](Get-CoreE2eWmcRestPropertyValue -Object $response -Names @('logHistory', 'LogHistory'))
 }
 
 function Get-CoreE2eWmcEmailSanitizationRow {
