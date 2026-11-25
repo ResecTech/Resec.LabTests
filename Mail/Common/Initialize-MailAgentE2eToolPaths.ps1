@@ -8,7 +8,7 @@
     MAIL_E2E_SIMPLE_MAIL_SERVER_EXE
     MAIL_E2E_SEND_BULK_ATTACHMENT_MAIL_EXE
 
-  Search order per tool: existing env (unless -Force), repo build outputs (Debug/Release, x64, publish single-file), then PATH.
+  Search order per tool: existing env (unless -Force), Tools\runtime\win-x64, repo build outputs (Debug/Release, x64, publish single-file), then PATH.
 
 .EXAMPLE
   . .\Mail\Common\Initialize-MailAgentE2eToolPaths.ps1

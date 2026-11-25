@@ -7,6 +7,7 @@ Set-StrictMode -Version Latest
 
 $script:ScanAgentE2eLabPathsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 . (Join-Path $script:ScanAgentE2eLabPathsRoot 'Common\LabDeployExeLocation.ps1')
+. (Join-Path $script:ScanAgentE2eLabPathsRoot 'Common\LabRuntimeTools.ps1'
 
 function Resolve-ScanAgentDebugPath {
     <#
@@ -39,6 +40,11 @@ function Resolve-ScanAgentDebugPath {
         $candidates.Add($fromConfig)
     }
 
+    $runtimeDebug = Get-LabRuntimeToolExePath -ExecutableFileName 'ScanAgentDebug.exe'
+    if ($null -ne $runtimeDebug) {
+        $candidates.Add($runtimeDebug)
+    }
+
     $candidates.Add((Join-Path $testTreeRoot 'ScanAgentDebug.exe'))
     $candidates.Add((Join-Path $CallingScriptRoot '..\ScanAgentDebug.exe'))
   # Prefer x64 build output (solution default) so co-located Resec.Agent.ScanAgent.exe matches the debug client.
@@ -61,7 +67,8 @@ function Resolve-ScanAgentDebugPath {
         }
     }
 
-    throw 'ScanAgentDebug not found. Build Resec.Agent.ScanAgent.DebugClient, set optional.scanAgentDebugExe in config\lab.local.json, set LAB_SCANAGENT_DEBUG_EXE, copy ScanAgentDebug.exe under Resec.LabTests\ScanAgent\, or pass -ScanAgentDebug.'
+    $runtimeDir = Get-LabRuntimeToolsWinX64Directory
+    throw "ScanAgentDebug not found. Use checked-in $runtimeDir\ScanAgentDebug.exe, build Resec.Agent.ScanAgent.DebugClient, set optional.scanAgentDebugExe in config\lab.local.json, set LAB_SCANAGENT_DEBUG_EXE, copy ScanAgentDebug.exe under Resec.LabTests\ScanAgent\, or pass -ScanAgentDebug."
 }
 
 function Format-ScanAgentE2eComponentVersion {

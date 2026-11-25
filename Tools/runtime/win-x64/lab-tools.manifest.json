@@ -1,0 +1,36 @@
+{
+  "updatedUtc": "2026-11-25T07:35:07.0021560+00:00",
+  "runtimeId": "win-x64",
+  "files": [
+    {
+      "fileName": "BulkMailConfig.json",
+      "bytes": 247,
+      "sha256": "de07ec499d7245ad9903a0d214e9610791ca18f9b7c46988e9fb6f5e06899ef8"
+    },
+    {
+      "fileName": "lab-tools.manifest.json",
+      "bytes": 1093,
+      "sha256": "512e56e7448c9f6e023d761864f6e52fb8073fbb28888e58c1214203068849cc"
+    },
+    {
+      "fileName": "ScanAgentDebug.exe",
+      "bytes": 79519713,
+      "sha256": "7cc22d7a957d424fa3aa434d14ca634d2d7fe9724a40fa2417e4deea8c42ed2b"
+    },
+    {
+      "fileName": "SendBulkAttachmentMail.exe",
+      "bytes": 31038308,
+      "sha256": "f292ca845a46ce2b904bb0b0f510ca4f98af9fb05a80afed1c8da037cc9e469a"
+    },
+    {
+      "fileName": "SendEml.exe",
+      "bytes": 87279876,
+      "sha256": "c9c63d09174da085abb3df5cde30102f6100e76cabe75701fd9561ddc489ac63"
+    },
+    {
+      "fileName": "SimpleMailServer.exe",
+      "bytes": 27943227,
+      "sha256": "4d16c021be6cd1122a1df1d7ae5358a5bd68358655d6f3f46eb46471f12cad8b"
+    }
+  ]
+}

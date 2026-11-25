@@ -1,6 +1,6 @@
 # Resec.LabTests
 
-Central home for Resec **lab E2E** scripts, fixtures, and shared configuration. Product repositories (Core, Scan Agent, Mail, FileTypeDetection) stay focused on application code; this repo is what you clone on a test machine together with product checkouts.
+Central home for Resec **lab E2E** scripts, fixtures, shared configuration, and checked-in lab utility binaries. Product agents are deployed from Lab Test Runner builds; product git checkouts are optional on lab VMs.
 
 Results are reported to the [Test Platform](https://github.com/ResecTech/TestPlatform) HTTP API (same contract as before). Set `TESTPLATFORM_DISABLE=1` to run without reporting.
 
@@ -14,8 +14,9 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
    notepad .\config\lab.local.json
    ```
 3. Set `products.*.repoRoot` to the git roots of Scan Agent, Core, Mail, and/or FileTypeDetection.
-4. Build product bits (Scan Agent DebugClient, LabTests `Tools\SimpleMailServer`, Mail `SendBulkAttachmentMail`, etc.) in those repos.
-5. Run a test, for example:
+4. **Lab helper EXEs** — checked in under `Tools\runtime\win-x64\` (no SDK required). Refresh with `.\scripts\Publish-LabRuntimeTools.ps1` when tool sources change.
+5. **Product agents** — download from Lab Test Runner **Product catalog** and **Deploy** (no local product build required on the lab VM).
+6. Run a test, for example:
    ```powershell
    .\ScanAgent\P0\SA-01-ConnectSourcesDestinationsLoad.ps1
    .\Core\NCP7330-QrImageSanitize.ps1 -PolicyTemplateXml C:\resec\ImportExport\latest.xml
@@ -41,7 +42,8 @@ Results are reported to the [Test Platform](https://github.com/ResecTech/TestPla
 | `ScanAgent/` | Scan Agent UI E2E scripts and `Common/` helpers |
 | `Core/` | Core `/debug/hook` E2E and QR fixture generator tool |
 | `Mail/` | Mail Agent E2E scripts and headless SMTP config (`Mail/Config`) |
-| `Tools/SimpleMailServer/` | Lab SMTP capture utility (`--cli`) for Mail and Core E2E |
+| `Tools/SimpleMailServer/` | SimpleMailServer source (maintainers); lab VMs use `Tools/runtime/win-x64/SimpleMailServer.exe` |
+| `Tools/runtime/win-x64/` | Checked-in self-contained Mail + Scan Agent E2E utilities |
 | `FileTypeDetection/` | P0 wrapper that runs the full FTD unit test suite and reports once |
 | `DirWatcher/` | Directory Watcher E2E (NCP-7340, NCP-7343, NCP-7345, NCP-7361 rejected save, NCP-7376 same-file re-drop) |
 | `RestApi/` | REST API E2E (NCP-7372 registry Core endpoint) |
@@ -95,17 +97,13 @@ Download builds from Product catalog, deploy from **Deploy** in the runner, then
 
 ## Mail E2E tools
 
-From the Mail Agent repo root:
-
-```powershell
-dotnet build src\Resec.Agent.Mail.sln -c Debug -p:Platform=x64
-```
-
-Then dot-source:
+Default: `Tools\runtime\win-x64\` (see `Tools/runtime/README.md`). To set session env vars explicitly:
 
 ```powershell
 . .\Mail\Common\Initialize-MailAgentE2eToolPaths.ps1
 ```
+
+Maintainers can rebuild from source (`Tools\SimpleMailServer`, Mail `SendBulkAttachmentMail`) and run `.\scripts\Publish-LabRuntimeTools.ps1`.
 
 ## Product repo migration
 

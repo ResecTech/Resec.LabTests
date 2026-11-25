@@ -1,0 +1,11 @@
+{
+  "EmlFilePath": "c:\\mails\\TestMail.eml",
+  "SmtpServer": "localhost",
+  "SmtpPort": 25,
+  "UseSsl": false,
+  "Username": null,
+  "Password": null,
+  "Count": 2,
+  "SubjectCounterStart": 100,
+  "SubjectPlaceHolder": "test-xxxxxx"
+}

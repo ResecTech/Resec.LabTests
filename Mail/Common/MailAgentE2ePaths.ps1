@@ -6,6 +6,7 @@ $script:MailAgentE2eSendBulkAttachmentMailEnvVar = 'MAIL_E2E_SEND_BULK_ATTACHMEN
 $script:MailAgentE2eSendEmlEnvVar = 'MAIL_E2E_SEND_EML_EXE'
 
 . (Join-Path $PSScriptRoot '..\..\Common\LabDeployExeLocation.ps1')
+. (Join-Path $PSScriptRoot '..\..\Common\LabRuntimeTools.ps1'
 
 function Get-MailAgentE2eExePathFromEnvironment {
     return Get-ResecLabExePathFromEnvironment -EnvironmentVariableNames @(
@@ -67,6 +68,11 @@ function Get-MailAgentE2eToolPathCandidates {
     $candidates = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
         $candidates.Add($ExplicitPath.Trim())
+    }
+
+    $runtimeExe = Get-LabRuntimeToolExePath -ExecutableFileName $ExecutableFileName
+    if ($null -ne $runtimeExe) {
+        $candidates.Add($runtimeExe)
     }
 
     $toolDirectories = New-Object System.Collections.Generic.List[string]
@@ -262,6 +268,7 @@ function Resolve-MailAgentE2eToolPath {
         $envHint = " Set $EnvironmentVariableName, or run Mail\Common\Initialize-MailAgentE2eToolPaths.ps1 from Resec.LabTests."
     }
 
+    $runtimeDir = Get-LabRuntimeToolsWinX64Directory
     $buildHint = if ($ToolName -eq 'SimpleMailServer') {
         'Resec.LabTests\Tools\SimpleMailServer'
     }
@@ -269,7 +276,7 @@ function Resolve-MailAgentE2eToolPath {
         "Resec.Agent.Mail\$ToolName"
     }
 
-    throw "$ExecutableFileName not found. Build $buildHint (Debug|Release), pass an explicit -Path parameter, or locate tools via environment.$envHint"
+    throw "$ExecutableFileName not found. Use checked-in $runtimeDir, build $buildHint (Debug|Release), pass an explicit -Path parameter, or locate tools via environment.$envHint"
 }
 
 function Resolve-SimpleMailServerPath {
