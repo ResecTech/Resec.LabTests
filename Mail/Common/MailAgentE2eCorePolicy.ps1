@@ -77,12 +77,18 @@ function New-MailAgentE2eEmailInfrastructureFacetRaw {
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $InboundPort = 25,
-        [string] $TempFolder = 'C:\ReSec\SMTP Temp'
+        [string] $TempFolder = 'C:\ReSec\SMTP Temp',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = ''
     )
 
     $relay = $RelayName.Trim()
     $temp = $TempFolder.Trim()
     $hop = $NextHopHost.Trim()
+    $useTls = if ($NextHopUseTls) { 'True' } else { 'False' }
+    $skipTls = if ($NextHopSkipTlsCertificateValidation) { 'True' } else { 'False' }
+    $incomingTlsSubject = if ([string]::IsNullOrWhiteSpace($IncomingTlsCertificateSubject)) { '' } else { $IncomingTlsCertificateSubject.Trim() }
 
     return @"
 ;Facet Email Agent Settings:Email Agent Settings
@@ -94,8 +100,51 @@ StrPropType_ScannedFileEmailLocationTempFolder=$temp
 NumPropType_ScannedFileEmailLocationIncomingPort=$InboundPort
 StrPropType_ScannedFileEmailLocationNextHopServerAddress=$hop
 StrPropType_ScannedFileEmailLocationNextHopPort=$NextHopPort
-NumPropType_ScannedFileEmailLocationNextHopUseTls=False
-NumPropType_ScannedFileEmailLocationNextHopSkipTlsCertificateValidation=True
+StrPropType_SmtpSenderIncomingTlsCertificateSubject=$incomingTlsSubject
+NumPropType_ScannedFileEmailLocationNextHopUseTls=$useTls
+NumPropType_ScannedFileEmailLocationNextHopSkipTlsCertificateValidation=$skipTls
+
+"@
+}
+
+function New-MailAgentE2eMa03DualHopEmailFacetRaw {
+    <#
+    Dual next hop: comma-separated server addresses (dead first, valid second); single shared NextHopPort (default 25).
+    Per-hop TLS flags remain comma-separated when they differ.
+    #>
+    param(
+        [string] $RelayName = 'mail',
+        [Parameter(Mandatory)][string] $DeadHopHost,
+        [Parameter(Mandatory)][string] $ValidHopHost,
+        [int] $NextHopPort = 25,
+        [int] $InboundPort = 25,
+        [string] $TempFolder = 'C:\ReSec\SMTP Temp',
+        [bool] $DeadHopUseTls = $false,
+        [bool] $ValidHopUseTls = $true,
+        [bool] $DeadHopSkipTlsCertificateValidation = $true,
+        [bool] $ValidHopSkipTlsCertificateValidation = $true
+    )
+
+    $relay = $RelayName.Trim()
+    $temp = $TempFolder.Trim()
+    $deadHop = $DeadHopHost.Trim()
+    $validHop = $ValidHopHost.Trim()
+    $addr = '{0},{1}' -f $deadHop, $validHop
+    $useTls = '{0},{1}' -f ($(if ($DeadHopUseTls) { 'True' } else { 'False' })), ($(if ($ValidHopUseTls) { 'True' } else { 'False' }))
+    $skipTls = '{0},{1}' -f ($(if ($DeadHopSkipTlsCertificateValidation) { 'True' } else { 'False' })), ($(if ($ValidHopSkipTlsCertificateValidation) { 'True' } else { 'False' }))
+
+    return @"
+;Facet Email Agent Settings:Email Agent Settings
+StrPropType_ScannedFileLocationName=MA-mail-lab
+StrPropType_ScannedFileEmailLocationRelayComputer=$relay
+NumPropType_ScannedFilesEmailLocationFacetIsFailOpen=0
+NumPropType_ScannedFileEmailImmediateResponseConfirmation=False
+StrPropType_ScannedFileEmailLocationTempFolder=$temp
+NumPropType_ScannedFileEmailLocationIncomingPort=$InboundPort
+StrPropType_ScannedFileEmailLocationNextHopServerAddress=$addr
+StrPropType_ScannedFileEmailLocationNextHopPort=$NextHopPort
+NumPropType_ScannedFileEmailLocationNextHopUseTls=$useTls
+NumPropType_ScannedFileEmailLocationNextHopSkipTlsCertificateValidation=$skipTls
 
 "@
 }
@@ -131,14 +180,28 @@ function Get-MailAgentE2eLabPolicyRawData {
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $InboundPort = 25,
-        [string] $TempFolder = 'C:\ReSec\SMTP Temp'
+        [string] $TempFolder = 'C:\ReSec\SMTP Temp',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = '',
+        [string] $EmailInfrastructureFacetRaw = ''
     )
 
     $allowedTypes = Get-MailAgentE2eLabAllowedFileTypesValue
     $scannersFacet = (New-Sa07LabScannersFacet).TrimEnd()
     $transformationActionsFacet = (New-SaLabDisabledTransformationActionsFacet).TrimEnd()
-    $emailInfra = (New-MailAgentE2eEmailInfrastructureFacetRaw -RelayName $RelayName -NextHopHost $NextHopHost `
-        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $TempFolder).TrimEnd()
+    if (-not [string]::IsNullOrWhiteSpace($EmailInfrastructureFacetRaw)) {
+        $emailInfra = $EmailInfrastructureFacetRaw.TrimEnd()
+        if ($emailInfra -notmatch '(?i)^\s*;Facet\s+Email Agent Settings') {
+            throw 'EmailInfrastructureFacetRaw must start with ;Facet Email Agent Settings:Email Agent Settings (full facet block from WebMC export or documented policy keys).'
+        }
+    }
+    else {
+        $emailInfra = (New-MailAgentE2eEmailInfrastructureFacetRaw -RelayName $RelayName -NextHopHost $NextHopHost `
+            -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $TempFolder `
+            -NextHopUseTls:$NextHopUseTls -NextHopSkipTlsCertificateValidation:$NextHopSkipTlsCertificateValidation `
+            -IncomingTlsCertificateSubject $IncomingTlsCertificateSubject).TrimEnd()
+    }
     $emailSignature = (New-MailAgentE2eEmailSignatureFacetRaw).TrimEnd()
     $relaySettings = (New-MailAgentE2eRelaySettingsFacetRaw -RelayName $RelayName).TrimEnd()
 
@@ -173,7 +236,11 @@ function New-MailAgentE2eLabPolicyImportBody {
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $InboundPort = 25,
-        [string] $TempFolder = 'C:\ReSec\SMTP Temp'
+        [string] $TempFolder = 'C:\ReSec\SMTP Temp',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = '',
+        [string] $EmailInfrastructureFacetRaw = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($PolicyName)) {
@@ -186,7 +253,10 @@ function New-MailAgentE2eLabPolicyImportBody {
     $policyName = $PolicyName.Trim()
     $assignmentRuleName = $AssignmentRuleName.Trim()
     $raw = Get-MailAgentE2eLabPolicyRawData -RelayName $RelayName -NextHopHost $NextHopHost `
-        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $TempFolder
+        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $TempFolder `
+        -NextHopUseTls:$NextHopUseTls -NextHopSkipTlsCertificateValidation:$NextHopSkipTlsCertificateValidation `
+        -IncomingTlsCertificateSubject $IncomingTlsCertificateSubject `
+        -EmailInfrastructureFacetRaw $EmailInfrastructureFacetRaw
 
     return [ordered]@{
         command            = 'importpolicies'
@@ -228,12 +298,19 @@ function Import-MailAgentE2eLabPolicy {
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $InboundPort = 25,
-        [string] $TempFolder = 'C:\ReSec\SMTP Temp'
+        [string] $TempFolder = 'C:\ReSec\SMTP Temp',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = '',
+        [string] $EmailInfrastructureFacetRaw = ''
     )
 
     $body = New-MailAgentE2eLabPolicyImportBody -PolicyName $PolicyName -AssignmentRuleName $AssignmentRuleName `
         -RelayName $RelayName -NextHopHost $NextHopHost -NextHopPort $NextHopPort `
-        -InboundPort $InboundPort -TempFolder $TempFolder
+        -InboundPort $InboundPort -TempFolder $TempFolder -NextHopUseTls:$NextHopUseTls `
+        -NextHopSkipTlsCertificateValidation:$NextHopSkipTlsCertificateValidation `
+        -IncomingTlsCertificateSubject $IncomingTlsCertificateSubject `
+        -EmailInfrastructureFacetRaw $EmailInfrastructureFacetRaw
     $import = Import-CoreE2ePolicies -HookUrl $HookUrl -ImportBody $body
 
     $count = if ($import.PSObject.Properties.Name -contains 'importedPolicyCount') { [int]$import.importedPolicyCount } else { 0 }
@@ -284,20 +361,65 @@ function Install-MailAgentE2eLabCorePolicy {
         [string] $NextHopHost = '127.0.0.1',
         [int] $NextHopPort = 26,
         [int] $InboundPort = 25,
-        [string] $TempFolder = ''
+        [string] $TempFolder = '',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = '',
+        [string] $EmailInfrastructureFacetRaw = '',
+        [string] $TestId = 'MA-01'
     )
 
     $relay = Get-MailAgentE2eDefaultRelayName -Override $RelayName
     $temp = Get-MailAgentE2eDefaultLabTempFolder -Override $TempFolder
 
-    Write-MailAgentE2eCorrelationLogMark -TestId 'MA-01' -Mark "policy | push+import start relay=$relay nextHop=${NextHopHost}:$NextHopPort" `
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark "policy | push+import start relay=$relay nextHop=${NextHopHost}:$NextHopPort" `
         -CoreDebugHookUrl $HookUrl
 
     Push-CoreE2ePolicyState -HookUrl $HookUrl | Out-Null
     Import-MailAgentE2eLabPolicy -HookUrl $HookUrl -RelayName $relay -NextHopHost $NextHopHost `
-        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $temp | Out-Null
-    Write-MailAgentE2eCorrelationLogMark -TestId 'MA-01' -Mark 'policy | push+import complete (nudge after mail agent connects)' `
+        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $temp `
+        -NextHopUseTls:$NextHopUseTls -NextHopSkipTlsCertificateValidation:$NextHopSkipTlsCertificateValidation `
+        -IncomingTlsCertificateSubject $IncomingTlsCertificateSubject `
+        -EmailInfrastructureFacetRaw $EmailInfrastructureFacetRaw | Out-Null
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark 'policy | push+import complete (nudge after mail agent connects)' `
         -CoreDebugHookUrl $HookUrl
+}
+
+function Update-MailAgentE2eLabCorePolicy {
+    <#
+    Re-import lab policy after initial push (MA-03 next-hop swaps) and nudge agent to reload.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $HookUrl,
+        [Parameter(Mandatory)]
+        [string] $MailAgentDebugUrl,
+        [string] $RelayName = '',
+        [string] $NextHopHost = '127.0.0.1',
+        [int] $NextHopPort = 26,
+        [int] $InboundPort = 25,
+        [string] $TempFolder = '',
+        [bool] $NextHopUseTls = $false,
+        [bool] $NextHopSkipTlsCertificateValidation = $true,
+        [string] $IncomingTlsCertificateSubject = '',
+        [string] $EmailInfrastructureFacetRaw = '',
+        [string] $TestId = 'MA-03'
+    )
+
+    $relay = Get-MailAgentE2eDefaultRelayName -Override $RelayName
+    $temp = Get-MailAgentE2eDefaultLabTempFolder -Override $TempFolder
+
+    Write-MailAgentE2eCorrelationLogMark -TestId $TestId -Mark "policy | re-import relay=$relay nextHop=${NextHopHost}:$NextHopPort" `
+        -CoreDebugHookUrl $HookUrl -MailAgentDebugUrl $MailAgentDebugUrl
+
+    Import-MailAgentE2eLabPolicy -HookUrl $HookUrl -RelayName $relay -NextHopHost $NextHopHost `
+        -NextHopPort $NextHopPort -InboundPort $InboundPort -TempFolder $temp `
+        -NextHopUseTls:$NextHopUseTls -NextHopSkipTlsCertificateValidation:$NextHopSkipTlsCertificateValidation `
+        -IncomingTlsCertificateSubject $IncomingTlsCertificateSubject `
+        -EmailInfrastructureFacetRaw $EmailInfrastructureFacetRaw | Out-Null
+
+    Invoke-MailAgentE2eAgentCommNudge -HookUrl $HookUrl -DisconnectHoldSec 3
+    Ensure-MailAgentE2eLabPolicyOnAgent -BaseUrl $MailAgentDebugUrl -HookUrl $HookUrl -TestId $TestId
 }
 
 function Restore-MailAgentE2eLabCorePolicy {

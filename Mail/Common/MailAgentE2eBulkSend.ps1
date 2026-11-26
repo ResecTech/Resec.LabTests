@@ -183,7 +183,12 @@ function Get-SimpleMailServerStatusSnapshot {
 
     try {
         $json = Get-Content -LiteralPath $StatusPath -Raw | ConvertFrom-Json
-        return @{ MessageCount = [int]$json.messageCount }
+        $countText = Get-MailAgentE2eStatusJsonStringProperty -Object $json -Name 'messageCount'
+        $count = 0
+        if (-not [string]::IsNullOrWhiteSpace($countText)) {
+            [void][int]::TryParse($countText, [ref]$count)
+        }
+        return @{ MessageCount = $count }
     }
     catch {
         return @{ MessageCount = 0 }
@@ -205,6 +210,31 @@ function Get-CaptureFolderFileSnapshot {
     return $snapshot
 }
 
+function Get-MailAgentE2eStatusJsonStringProperty {
+    param(
+        $Object,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    if ($null -eq $Object) {
+        return ''
+    }
+
+    if ($Object -is [hashtable]) {
+        if ($Object.ContainsKey($Name)) {
+            return [string]$Object[$Name]
+        }
+        return ''
+    }
+
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop) {
+        return ''
+    }
+
+    return [string]$prop.Value
+}
+
 function Resolve-CapturedMailSubject {
     param(
         $StatusJson,
@@ -212,8 +242,8 @@ function Resolve-CapturedMailSubject {
         [hashtable] $ExcludeCaptureFiles
     )
 
-    $subject = [string]$StatusJson.lastSubject
-    $savedPath = [string]$StatusJson.lastSavedFilePath
+    $subject = Get-MailAgentE2eStatusJsonStringProperty -Object $StatusJson -Name 'lastSubject'
+    $savedPath = Get-MailAgentE2eStatusJsonStringProperty -Object $StatusJson -Name 'lastSavedFilePath'
     if ([string]::IsNullOrWhiteSpace($subject) -and -not [string]::IsNullOrWhiteSpace($savedPath)) {
         $subject = Get-EmlSubjectLine -EmlPath $savedPath
     }
@@ -258,7 +288,12 @@ function Wait-ForCapturedSubject {
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $StatusPath) {
             $json = Get-Content -LiteralPath $StatusPath -Raw | ConvertFrom-Json
-            if ([int]$json.messageCount -gt $MinMessageCount) {
+            $countText = Get-MailAgentE2eStatusJsonStringProperty -Object $json -Name 'messageCount'
+            $messageCount = 0
+            if (-not [string]::IsNullOrWhiteSpace($countText)) {
+                [void][int]::TryParse($countText, [ref]$messageCount)
+            }
+            if ($messageCount -gt $MinMessageCount) {
                 $resolved = Resolve-CapturedMailSubject -StatusJson $json -CaptureFolder $CaptureFolder -ExcludeCaptureFiles $ExcludeCaptureFiles
                 if ($null -ne $resolved -and $resolved.Subject -like "*$ExpectedSubject*") {
                     $json | Add-Member -NotePropertyName resolvedSubject -NotePropertyValue $resolved.Subject -Force
@@ -318,6 +353,42 @@ function Wait-ForSanitizationStagingWhileProcessRunning {
     }
 
     return $null
+}
+
+function Get-MailAgentE2eBulkReportSubjectPrefix {
+    param(
+        $Report,
+        [string] $ConfiguredPrefix = ''
+    )
+
+    if ($null -eq $Report) {
+        return $ConfiguredPrefix
+    }
+
+    $fromReport = Get-MailAgentE2eStatusJsonStringProperty -Object $Report -Name 'subjectPrefix'
+    if (-not [string]::IsNullOrWhiteSpace($fromReport)) {
+        return $fromReport.Trim()
+    }
+
+    return $ConfiguredPrefix
+}
+
+function Resolve-MailAgentE2eBulkCoreSubjectContains {
+    <#
+    SendBulkAttachmentMail sets Subject to "{timestamp}-{n}" (see bulk JSON report / mail agent logs).
+    Config SubjectPrefix may include a test label (MA02-B-20261126072429); Core/WMC subject filters need the timestamp token.
+    #>
+    param([string] $SubjectPrefix)
+
+    if ([string]::IsNullOrWhiteSpace($SubjectPrefix)) {
+        return ''
+    }
+
+    if ($SubjectPrefix -match '(\d{14})$') {
+        return $Matches[1]
+    }
+
+    return $SubjectPrefix.Trim()
 }
 
 function New-BulkSendAppsettings {
@@ -441,6 +512,53 @@ function Test-MailAgentE2eExpectedCommdownInbound451 {
 
     $blob = ($FailureDetail + ' ' + $StderrText + ' ' + $StdoutText).ToLowerInvariant()
     return ($blob -match '451') -or ($blob -match 'service unavailable') -or ($blob -match 'try again later')
+}
+
+function Test-MailAgentE2eInboundSmtp452Observed {
+    param(
+        [string] $FailureDetail = '',
+        [string] $StderrText = '',
+        [string] $StdoutText = ''
+    )
+
+    $blob = ($FailureDetail + ' ' + $StderrText + ' ' + $StdoutText).ToLowerInvariant()
+    return ($blob -match '\b452\b') -or ($blob -match 'insufficient system storage|too many sessions|session limit|queue full')
+}
+
+function Assert-MailAgentE2eInboundCapacity452Observed {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable] $BulkJob,
+        [string] $FailureDetail = '',
+        [string] $Context = 'MA-03 C capacity',
+        [string] $MailAgentDebugUrl = '',
+        [int] $AgentLogTailLines = 400
+    )
+
+    $redirect = Read-MailAgentE2eBulkSendRedirectFiles -StdoutFile $BulkJob.StdoutFile -StderrFile $BulkJob.StderrFile
+    if (Test-MailAgentE2eInboundSmtp452Observed -FailureDetail $FailureDetail `
+            -StderrText $redirect.Stderr -StdoutText $redirect.Stdout) {
+        Write-Host "[INFO] $Context - inbound SMTP 452 (or capacity text) observed in SendBulk output."
+        return @{
+            ObservedIn = 'SendBulk'
+            Sample     = ($redirect.Stderr + ' ' + $redirect.Stdout).Trim()
+        }
+    }
+
+    $log = Get-MailAgentDebugLogPathEvidence -BaseUrl $MailAgentDebugUrl
+    if (-not [string]::IsNullOrWhiteSpace($log) -and (Test-Path -LiteralPath $log)) {
+        $tail = @(Get-Content -LiteralPath $log -Tail $AgentLogTailLines -ErrorAction SilentlyContinue)
+        $blob = ($tail -join [Environment]::NewLine).ToLowerInvariant()
+        if ($blob -match '\b452\b' -or $blob -match 'insufficient system storage|session limit|too many sessions') {
+            Write-Host "[INFO] $Context - inbound SMTP 452 (or capacity text) observed in mail agent log."
+            return @{
+                ObservedIn = 'MailAgentLog'
+                Sample     = ($tail | Select-Object -Last 5) -join ' | '
+            }
+        }
+    }
+
+    throw "$Context - expected inbound SMTP 452/4xx capacity rejection under overload; not found in SendBulk output or agent log tail."
 }
 
 function Assert-MailAgentE2eCommdownInbound451Observed {
@@ -810,6 +928,49 @@ function Test-CapturedEmlContainsResecSignature {
     return $false
 }
 
+function Format-MailAgentE2eSendEmlCliToken {
+    param(
+        [AllowEmptyString()]
+        [string] $Token
+    )
+
+    if ([string]::IsNullOrEmpty($Token)) {
+        return '""'
+    }
+
+    if ($Token -notmatch '[\s"<>]') {
+        return $Token
+    }
+
+    return '"' + ($Token.Replace('"', '""')) + '"'
+}
+
+function Build-MailAgentE2eSendEmlProcessArguments {
+    param(
+        [Parameter(Mandatory)][string] $EmlPath,
+        [Parameter(Mandatory)][string] $SmtpServer,
+        [Parameter(Mandatory)][int] $SmtpPort,
+        [string] $EnvelopeFromOverride,
+        [switch] $UseEnvelopeFromOverride
+    )
+
+    $tokens = @(
+        (Format-MailAgentE2eSendEmlCliToken -Token $EmlPath),
+        (Format-MailAgentE2eSendEmlCliToken -Token $SmtpServer),
+        [string]$SmtpPort,
+        'false'
+    )
+
+    if ($UseEnvelopeFromOverride) {
+        # SendEml optional args 5-7; PS 5.1 Start-Process rejects empty strings in -ArgumentList arrays.
+        $tokens += '""'
+        $tokens += '""'
+        $tokens += (Format-MailAgentE2eSendEmlCliToken -Token $EnvelopeFromOverride)
+    }
+
+    return ($tokens -join ' ')
+}
+
 function Invoke-SendEmlToAgent {
     param(
         [Parameter(Mandatory)][string] $SendEmlExe,
@@ -819,20 +980,13 @@ function Invoke-SendEmlToAgent {
         [string] $EnvelopeFromOverride
     )
 
-    $args = New-Object System.Collections.Generic.List[string]
-    $args.Add($EmlPath)
-    $args.Add($SmtpServer)
-    $args.Add([string]$SmtpPort)
-    $args.Add('false')
-    if ($PSBoundParameters.ContainsKey('EnvelopeFromOverride')) {
-        $args.Add('')
-        $args.Add('')
-        $args.Add($EnvelopeFromOverride)
-    }
+    $useOverride = $PSBoundParameters.ContainsKey('EnvelopeFromOverride')
+    $argumentLine = Build-MailAgentE2eSendEmlProcessArguments -EmlPath $EmlPath -SmtpServer $SmtpServer `
+        -SmtpPort $SmtpPort -EnvelopeFromOverride $EnvelopeFromOverride -UseEnvelopeFromOverride:$useOverride
 
     $stdoutFile = Join-Path $env:TEMP "MailE2e-sendeml-stdout-$(Get-Date -Format 'yyyyMMddHHmmssfff').log"
     $stderrFile = Join-Path $env:TEMP "MailE2e-sendeml-stderr-$(Get-Date -Format 'yyyyMMddHHmmssfff').log"
-    $proc = Start-Process -FilePath $SendEmlExe -ArgumentList $args.ToArray() `
+    $proc = Start-Process -FilePath $SendEmlExe -ArgumentList $argumentLine `
         -PassThru -NoNewWindow -Wait -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
 
     $stdout = if (Test-Path -LiteralPath $stdoutFile) { [System.IO.File]::ReadAllText($stdoutFile) } else { '' }

@@ -41,6 +41,7 @@ Each substep has **Do** (exact actions) and **Expect** (pass criteria). Run A, B
 - **P2** — version skew / multi-Core registry occasionally.
 - **Automated:** `Mail/P0/MA-01-SmokeAndInbound.ps1` — **MA-01** substeps **A–E** and **F1**; **MA-02 C** long commdown via `-IncludeMa02CLongCommdown`. **F2**, **F3**, **G**, **H** need WMC/lab prep (see script switches).
 - **Automated:** `Mail/P0/MA-02-Resilience.ps1` — **MA-02** substeps **A–E** (use `-SkipStep*` for subsets). Step **C** calls `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1`. Standalone **C**: `Mail/P0/MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1`.
+- **Automated:** `Mail/P0/MA-03-OutboundAndCapacity.ps1` — **MA-03** substeps **A–D** (`-SkipStep*`). **A/B** each send **one** message. **A1** dual-hop facet + `user@dev.resec.co` for M365 hop. **B** sets **`StrPropType_SmtpSenderIncomingTlsCertificateSubject`** (auto **CN=localhost** from cert store when available), **restarts** mail agent, sends one mail to SimpleMail capture. Override with **`-Ma03IncomingTlsCertificateSubject`** or **`MAIL_E2E_INBOUND_TLS_CERTIFICATE_SUBJECT`**. **C** overload load; **D** debug `stats`.
 
 ---
 
@@ -104,8 +105,8 @@ Policy toggles for session: SIR on/off, CDR, per-recipient, filters (MA-13), rec
 | # | Plan step | Script / helper |
 |---|-----------|-----------------|
 | 1 | **A** — idle temp (standalone baseline) | `Invoke-Ma02StepA` → `Assert-MailAgentE2eIdleTempFolders` |
-| 2 | **B** — 5–10 mails + restart while some still in flight | `Invoke-Ma02StepB`; `Wait-CoreE2eRunningSanitizationForSubject` (`runningsanitizations`); agent fallback `Wait-MailAgentE2eBurstInFlight`; restart service; idle temp folders |
-| 3 | **C** — commdown ≤30s / ≥30s, 451, capture, listen, temp **0** | Child `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (`-Ma02CScenarios` / `-Scenarios`) |
+| 2 | **B** — 5–10 mails + restart while some still in flight | `Invoke-Ma02StepB`; `Resolve-MailAgentE2eBulkCoreSubjectContains` (SendBulk subject timestamp, not `MA02-B-` label); `Wait-CoreE2eRunningSanitizationForSubject`; agent fallback `Wait-MailAgentE2eBurstInFlight`; restart service; idle temp folders |
+| 3 | **C** — commdown ≤30s / ≥30s, 451, capture, **WMC Pass**, listen, temp **0** | Child `MA-02-C-NCP7307-ReconnectOutboundDelivery.ps1` (`-Scenarios`); per-scenario `Wait-CoreE2eWmcEmailSanitizationBySubject` (`OutcomePassed`); `-SkipWmcCheck` optional |
 | 4 | **D** — Core outage **without** agent restart; clean mail + **Authenticated** | `Invoke-Ma02StepD` — `agentcommblockon/off` hold (default **300s**, `-StepDCommdownHoldSeconds`) |
 | 5 | **E** — listen check every 5 min for 15 min | `Invoke-Ma02StepE` with Core `dbsimulateon` + `Invoke-MailAgentE2eListenPortSoak`; `-SkipCoreDatabaseSimulation` for listen-only |
 | 6 | Skipped steps | `-SkipStepA` … `-SkipStepE` |

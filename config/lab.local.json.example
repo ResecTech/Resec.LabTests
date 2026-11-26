@@ -19,6 +19,9 @@
   "optional": {
     "fixturesRoot": "",
     "scanAgentDebugExe": "",
+    "simpleMailServerExe": "",
+    "sendBulkAttachmentMailExe": "",
+    "sendEmlExe": "",
     "dirWatcherExe": "",
     "corePolicyTemplateXml": "",
     "testPlatformBaseUrl": "",

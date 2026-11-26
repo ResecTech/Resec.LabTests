@@ -56,30 +56,34 @@ function Connect-CoreE2eWmcRestSession {
 
     $creds = Get-CoreE2eWmcCredentials -UserOverride $User -PasswordOverride $Password
     $loginUri = '{0}/v1/auth/login' -f $BaseUrl.TrimEnd('/')
+    $loginHeaders = @{
+        user     = $creds.User
+        password = $creds.Password
+        remoteIp = $RemoteIp
+    }
 
-    $irmParams = @{
-        Uri     = $loginUri
-        Method  = 'Post'
-        Headers = @{
-            user     = $creds.User
-            password = $creds.Password
-            remoteIp = $RemoteIp
+    $login = Invoke-CoreE2eHttpsRestViaCurl -Uri $loginUri -Method Post -Headers $loginHeaders -TimeoutSec 120
+    if ($null -eq $login) {
+        $irmParams = @{
+            Uri     = $loginUri
+            Method  = 'Post'
+            Headers = $loginHeaders
         }
-    }
 
-    if ($PSVersionTable.PSVersion.Major -ge 6) {
-        $irmParams.SkipCertificateCheck = $true
-    }
-    else {
-        Enable-CoreE2eDebugTlsBypass
-    }
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $irmParams.SkipCertificateCheck = $true
+        }
+        else {
+            Enable-CoreE2eDebugTlsBypass
+        }
 
-    $raw = Invoke-RestMethod @irmParams
-    if ($raw -is [string]) {
-        $login = $raw | ConvertFrom-Json
-    }
-    else {
-        $login = $raw
+        $raw = Invoke-RestMethod @irmParams
+        if ($raw -is [string]) {
+            $login = $raw | ConvertFrom-Json
+        }
+        else {
+            $login = $raw
+        }
     }
 
     $token = [string]$login.apiToken

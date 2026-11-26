@@ -76,11 +76,19 @@ function Invoke-Ma02StepB {
         -MinAttachmentsPerEmail 1 -MaxAttachmentsPerEmail 1
 
     $bulkJob = Start-BulkSendOnce -ExePath $Lab.BulkExe -ConfigPath $bulkConfigPath -SubjectPrefix $subjectPrefix
-    Start-Sleep -Seconds 2
+    $coreSubjectContains = Resolve-MailAgentE2eBulkCoreSubjectContains -SubjectPrefix $subjectPrefix
+    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [STEP] MA-02 B - in-flight watch (Core subjectContains=$coreSubjectContains; SendBulk subjects like ${coreSubjectContains}-1)."
+    Start-Sleep -Milliseconds 500
 
     if (-not [string]::IsNullOrWhiteSpace($CoreDebugHookUrl)) {
-        $null = Wait-CoreE2eRunningSanitizationForSubject -HookUrl $CoreDebugHookUrl -SubjectPrefix $subjectPrefix `
-            -TimeoutSec $RunningWaitSec -Context 'MA-02 B'
+        try {
+            $null = Wait-CoreE2eRunningSanitizationForSubject -HookUrl $CoreDebugHookUrl -SubjectPrefix $coreSubjectContains `
+                -TimeoutSec $RunningWaitSec -Context 'MA-02 B'
+        }
+        catch {
+            Write-Host "[WARN] MA-02 B: Core runningsanitizations: $($_.Exception.Message)"
+            $null = Wait-MailAgentE2eBurstInFlight -BaseUrl $Lab.MailAgentDebugUrl -TimeoutSec 30 -Context 'MA-02 B (agent fallback)'
+        }
     }
     else {
         $null = Wait-MailAgentE2eBurstInFlight -BaseUrl $Lab.MailAgentDebugUrl -TimeoutSec $RunningWaitSec -Context 'MA-02 B'

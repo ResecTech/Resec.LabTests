@@ -25,6 +25,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$labTestsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+. (Join-Path $labTestsRoot 'Common\LabConfig.ps1')
+
 $commonRoot = $PSScriptRoot
 . (Join-Path $commonRoot 'MailAgentE2ePaths.ps1')
 

@@ -111,6 +111,59 @@ function Invoke-CoreE2eRestMethod {
     }
 }
 
+function Invoke-CoreE2eDebugHookViaCurl {
+    param(
+        [Parameter(Mandatory)][string] $Uri,
+        [ValidateSet('Get', 'Post')]
+        [string] $Method = 'Get',
+        [byte[]] $Body,
+        [string] $ContentType = 'application/json; charset=utf-8',
+        [int] $TimeoutSec = 300
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        return $null
+    }
+
+    $maxTime = [Math]::Max(1, $TimeoutSec)
+    $args = @('-sS', '--max-time', [string]$maxTime)
+    if ($Uri -like 'https://*') {
+        $args += '-k'
+    }
+
+    $bodyFile = $null
+    try {
+        if ($Method -eq 'Post') {
+            $args += '-X', 'POST'
+            $args += '-H', "Content-Type: $ContentType"
+            if ($Body -and $Body.Length -gt 0) {
+                $bodyFile = [System.IO.Path]::GetTempFileName()
+                [System.IO.File]::WriteAllBytes($bodyFile, $Body)
+                $args += '--data-binary', "@$bodyFile"
+            }
+        }
+
+        $args += $Uri
+        $output = & curl.exe @args 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl.exe failed (exit $LASTEXITCODE): $output"
+        }
+
+        $text = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            throw 'curl.exe returned empty response.'
+        }
+
+        return $text | ConvertFrom-Json
+    }
+    finally {
+        if ($bodyFile -and (Test-Path -LiteralPath $bodyFile)) {
+            Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-CoreE2eDebugHook {
     param(
         [Parameter(Mandatory)]
@@ -132,6 +185,12 @@ function Invoke-CoreE2eDebugHook {
         }
         $json = $payload | ConvertTo-Json -Depth 80 -Compress
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $curlResult = Invoke-CoreE2eDebugHookViaCurl -Uri $HookUrl -Method Post -Body $bytes `
+            -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
+        if ($null -ne $curlResult) {
+            return $curlResult
+        }
+
         return Invoke-CoreE2eRestMethod -Uri $HookUrl -Method Post -Body $bytes `
             -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
     }
@@ -149,6 +208,11 @@ function Invoke-CoreE2eDebugHook {
     }
 
     $uri = '{0}{1}{2}' -f $HookUrl, $separator, ($queryParts -join '&')
+    $curlResult = Invoke-CoreE2eDebugHookViaCurl -Uri $uri -Method Get -TimeoutSec $TimeoutSec
+    if ($null -ne $curlResult) {
+        return $curlResult
+    }
+
     return Invoke-CoreE2eRestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec
 }
 

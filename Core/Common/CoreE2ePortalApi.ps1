@@ -7,6 +7,67 @@
 #>
 Set-StrictMode -Version Latest
 
+function Invoke-CoreE2eHttpsRestViaCurl {
+    param(
+        [Parameter(Mandatory)][string] $Uri,
+        [ValidateSet('Get', 'Post')]
+        [string] $Method = 'Get',
+        [hashtable] $Headers,
+        [byte[]] $Body,
+        [string] $ContentType = 'application/json; charset=utf-8',
+        [int] $TimeoutSec = 120
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        return $null
+    }
+
+    $bodyFile = $null
+    try {
+        $maxTime = [Math]::Max(1, $TimeoutSec)
+        $args = @('-sS', '--max-time', [string]$maxTime)
+        if ($Uri -like 'https://*') {
+            $args += '-k'
+        }
+
+        $args += '-X', $Method
+        if ($Headers) {
+            foreach ($key in @($Headers.Keys)) {
+                $args += '-H', ("{0}: {1}" -f $key, $Headers[$key])
+            }
+        }
+
+        if ($Method -eq 'Post' -and $Body -and $Body.Length -gt 0) {
+            $bodyFile = [System.IO.Path]::GetTempFileName()
+            [System.IO.File]::WriteAllBytes($bodyFile, $Body)
+            $args += '-H', "Content-Type: $ContentType"
+            $args += '--data-binary', "@$bodyFile"
+        }
+
+        $args += $Uri
+        $output = & curl.exe @args 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+
+        $text = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            return $null
+        }
+
+        return $text | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+    finally {
+        if ($bodyFile -and (Test-Path -LiteralPath $bodyFile)) {
+            Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Get-CoreE2eCoreRestBaseUrl {
     param(
         [string] $HookUrl = '',
@@ -126,10 +187,18 @@ function Invoke-CoreE2ePortalRestMethod {
         Enable-CoreE2eDebugTlsBypass
     }
 
+    $bodyBytes = $null
     if ($BodyObject) {
         $json = $BodyObject | ConvertTo-Json -Depth 20 -Compress
         $irmParams.Body = $json
         $irmParams.ContentType = 'application/json; charset=utf-8'
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    }
+
+    $curlResult = Invoke-CoreE2eHttpsRestViaCurl -Uri $uri -Method $Method -Headers $headers `
+        -Body $bodyBytes -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
+    if ($null -ne $curlResult) {
+        return $curlResult
     }
 
     return Invoke-RestMethod @irmParams

@@ -2,6 +2,8 @@
 
 PowerShell E2E scripts for **Resec Directory Watcher** against a lab Core with `/debug/hook` policy injection.
 
+**Manual test plan:** [`../DW-minimal-functional-testplan.md`](../DW-minimal-functional-testplan.md) (P0–P2, QTest / Jira / GitHub traceability).
+
 ## Prerequisites
 
 | # | Requirement |

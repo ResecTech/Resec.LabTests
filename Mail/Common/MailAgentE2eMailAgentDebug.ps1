@@ -851,6 +851,28 @@ function Get-MailAgentE2eWindowsServiceName {
     return $null
 }
 
+function Restart-MailAgentE2eDesktopProcessInstance {
+    param(
+        [Parameter(Mandatory)]
+        [string] $CallingScriptRoot,
+        [string] $MailAgentDebugUrl = '',
+        [string] $MailAgentExePath = '',
+        [int] $ExpectedInboundPort = 0,
+        [int] $StartupTimeoutSec = 90,
+        [string] $Context = 'MA-02 B'
+    )
+
+    Write-MailAgentE2eAutostartStep "Restarting desktop Resec.Agent.Mail process ($Context)."
+    Stop-MailAgentE2eDesktopAgents -AgentExePath $MailAgentExePath
+    Start-Sleep -Seconds 2
+    $ensure = Ensure-MailAgentE2eProcessRunning -CallingScriptRoot $CallingScriptRoot -BaseUrl $MailAgentDebugUrl `
+        -MailAgentExePath $MailAgentExePath -ExpectedInboundPort $ExpectedInboundPort `
+        -StartupTimeoutSec $StartupTimeoutSec -AllowRepeatStart
+    if (-not $ensure.Process) {
+        throw "$Context - could not restart mail agent after process stop (Ensure returned no process; see prior log for debug hook wait errors)."
+    }
+}
+
 function Restart-MailAgentE2eWindowsServiceOrProcess {
     param(
         [Parameter(Mandatory)]
@@ -858,28 +880,40 @@ function Restart-MailAgentE2eWindowsServiceOrProcess {
         [string] $MailAgentDebugUrl = '',
         [string] $MailAgentExePath = '',
         [int] $ExpectedInboundPort = 0,
-        [int] $StartupTimeoutSec = 90
+        [int] $StartupTimeoutSec = 90,
+        [string] $Context = 'MA-02 B'
     )
 
-    $serviceName = Get-MailAgentE2eWindowsServiceName
-    if (-not [string]::IsNullOrWhiteSpace($serviceName)) {
-        Write-MailAgentE2eAutostartStep "Restarting mail agent Windows service '$serviceName' (MA-02 B)."
-        Restart-Service -Name $serviceName -Force -ErrorAction Stop
-        Start-Sleep -Seconds 3
-        $null = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugUrl -ExpectedInboundPort $ExpectedInboundPort `
-            -TimeoutSec $StartupTimeoutSec
+    # MA-02 / Ensure-MailAgentE2eProcessRunning starts the desktop exe; do not call Restart-Service on an unrelated or inaccessible SCM entry.
+    $desktopProcs = @(Get-MailAgentE2eDesktopAgentProcesses -AgentExePath $MailAgentExePath)
+    if ($desktopProcs.Count -gt 0) {
+        Restart-MailAgentE2eDesktopProcessInstance -CallingScriptRoot $CallingScriptRoot -MailAgentDebugUrl $MailAgentDebugUrl `
+            -MailAgentExePath $MailAgentExePath -ExpectedInboundPort $ExpectedInboundPort `
+            -StartupTimeoutSec $StartupTimeoutSec -Context $Context
         return
     }
 
-    Write-Host '[WARN] Mail agent Windows service not found; restarting desktop Resec.Agent.Mail process (set MAIL_E2E_MAIL_AGENT_SERVICE_NAME for service-based labs).'
-    Stop-MailAgentE2eDesktopAgents -AgentExePath $MailAgentExePath
-    Start-Sleep -Seconds 2
-    $ensure = Ensure-MailAgentE2eProcessRunning -CallingScriptRoot $CallingScriptRoot -BaseUrl $MailAgentDebugUrl `
-        -MailAgentExePath $MailAgentExePath -ExpectedInboundPort $ExpectedInboundPort `
-        -StartupTimeoutSec $StartupTimeoutSec
-    if (-not $ensure.Process) {
-        throw 'MA-02 B: could not restart mail agent after process stop.'
+    $serviceName = Get-MailAgentE2eWindowsServiceName
+    if (-not [string]::IsNullOrWhiteSpace($serviceName)) {
+        Write-MailAgentE2eAutostartStep "Restarting mail agent Windows service '$serviceName' ($Context)."
+        try {
+            Restart-Service -Name $serviceName -Force -ErrorAction Stop
+            Start-Sleep -Seconds 3
+            $null = Wait-MailAgentDebugReady -BaseUrl $MailAgentDebugUrl -ExpectedInboundPort $ExpectedInboundPort `
+                -TimeoutSec $StartupTimeoutSec
+            return
+        }
+        catch {
+            Write-Host "[WARN] Could not restart Windows service '$serviceName': $($_.Exception.Message). Falling back to desktop process restart."
+        }
     }
+    else {
+        Write-Host '[WARN] Mail agent Windows service not found (set MAIL_E2E_MAIL_AGENT_SERVICE_NAME for service-only labs).'
+    }
+
+    Restart-MailAgentE2eDesktopProcessInstance -CallingScriptRoot $CallingScriptRoot -MailAgentDebugUrl $MailAgentDebugUrl `
+        -MailAgentExePath $MailAgentExePath -ExpectedInboundPort $ExpectedInboundPort `
+        -StartupTimeoutSec $StartupTimeoutSec -Context $Context
 }
 
 function Invoke-MailAgentE2eListenPortSoak {
@@ -940,7 +974,8 @@ function Ensure-MailAgentE2eProcessRunning {
         [string] $MailAgentExePath = '',
         [int] $ExpectedInboundPort = 0,
         [int] $StartupTimeoutSec = 90,
-        [switch] $SkipStart
+        [switch] $SkipStart,
+        [switch] $AllowRepeatStart
     )
 
     $startedByScript = $false
@@ -966,11 +1001,13 @@ function Ensure-MailAgentE2eProcessRunning {
         }
     }
 
-    if ($script:MailAgentE2eProcessEnsureAttempted) {
+    if (-not $AllowRepeatStart -and $script:MailAgentE2eProcessEnsureAttempted) {
         return [pscustomobject]@{ StartedByScript = $false; Process = $null }
     }
 
-    $script:MailAgentE2eProcessEnsureAttempted = $true
+    if (-not $AllowRepeatStart) {
+        $script:MailAgentE2eProcessEnsureAttempted = $true
+    }
     $agentExe = Resolve-MailAgentE2eAgentExePath -CallingScriptRoot $CallingScriptRoot -Path $MailAgentExePath
     $agentFull = [System.IO.Path]::GetFullPath($agentExe)
     $workDir = [System.IO.Path]::GetDirectoryName($agentFull)
